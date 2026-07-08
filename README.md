@@ -1,32 +1,50 @@
-# React + TypeScript + Vite
+# Sistema POS (Administración Local)
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Esta es la aplicación de Punto de Venta (POS) y administración para el Minimarket Flor. Está construida usando **Electron**, **React**, y **Vite**. Cuenta con una base de datos local súper rápida (`better-sqlite3`) y se sincroniza en segundo plano con **Firebase**.
 
-Currently, two official plugins are available:
+## 🚀 Instalación y Configuración
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Si has descargado este repositorio para usarlo por tu cuenta, los datos de los productos y clientes se guardarán localmente en tu computadora. Sin embargo, para sincronizar estos datos con la nube y con tu propia tienda web, debes conectar la aplicación a tu propio proyecto de Firebase.
 
-## React Compiler
+### 1. Requisitos previos
+- Node.js (v18+)
+- Una cuenta de [Firebase](https://firebase.google.com/) con un proyecto creado.
+- Firestore Database y Firebase Storage habilitados.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### 2. Configurar Firebase por primera vez
+1. Instala las dependencias y ejecuta la aplicación en modo desarrollo:
+   ```bash
+   npm install
+   npm run dev
+   ```
+2. Al abrir la aplicación por primera vez, el sistema detectará que no hay una configuración de nube activa y te mostrará una **pantalla de Configuración de Base de Datos**.
+3. En la consola de Firebase de tu proyecto, ve a la configuración y copia el fragmento JSON de las credenciales web.
+4. Pega ese código JSON directamente en la aplicación. La aplicación validará el formato y lo guardará de manera local y segura.
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
+Ejemplo del código que te pedirá la app:
 ```json
 {
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
+  "apiKey": "AIzaSy...",
+  "authDomain": "tu-proyecto.firebaseapp.com",
+  "projectId": "tu-proyecto",
+  "storageBucket": "tu-proyecto.firebasestorage.app",
+  "messagingSenderId": "123456789",
+  "appId": "1:123456789:web:abcde",
+  "measurementId": "G-123456"
 }
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+### 3. Usuario por Defecto y Descarga desde la Nube
+Una vez configurado Firebase, si tu base de datos local SQLite está vacía, el sistema creará automáticamente un usuario administrador local para que puedas iniciar sesión por primera vez:
+- **Usuario:** `admin`
+- **Contraseña:** `admin`
+
+Si ya tenías información previamente guardada en tu Firebase (por ejemplo, si acabas de formatear tu PC o estás instalando el POS en una segunda computadora), puedes ir a la barra lateral izquierda y usar el botón **"Descargar Base de Datos"**. Esto copiará todo tu catálogo de la nube hacia el almacenamiento local del dispositivo.
+
+## 🛠 Compilar la Aplicación (Generar .exe)
+
+Para crear un instalador empaquetado para Windows:
+```bash
+npm run dist
+```
+El instalador generado se encontrará en la carpeta `release/`.

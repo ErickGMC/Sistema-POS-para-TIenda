@@ -2,9 +2,11 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { app } = require('electron');
 
 // Obtener la ruta de la base de datos (segura en producción)
-const dbPath = path.join(__dirname, 'pos.db');
+const dbDir = app.isPackaged ? app.getPath('userData') : __dirname;
+const dbPath = path.join(dbDir, 'pos.db');
 const schemaPath = path.join(__dirname, 'schema.sql');
 
 // Inicializar base de datos
@@ -62,8 +64,22 @@ try {
     console.error("Error creating correlativos table:", e);
 }
 
-// La creación del usuario por defecto ha sido eliminada.
-// El sistema ahora requiere que el primer login se haga validando con Firebase Auth.
+// Crear usuario por defecto si no existen usuarios (permite el primer login antes de descargar la nube)
+try {
+    const count = db.prepare("SELECT COUNT(*) as count FROM usuarios").get().count;
+    if (count === 0) {
+        const adminId = crypto.randomUUID();
+        const salt = crypto.randomBytes(16).toString('hex');
+        const hash = crypto.scryptSync('admin', salt, 64).toString('hex');
+        
+        db.prepare('INSERT INTO usuarios (id, username, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+            adminId, 'admin', hash, salt, 'admin', JSON.stringify(['all']), 1
+        );
+        console.log('Usuario admin por defecto creado.');
+    }
+} catch (e) {
+    console.error("Error al crear usuario por defecto:", e);
+}
 // --- Funciones CRUD de Productos ---
 
 const stmtBuscarProductoPorCodigo = db.prepare('SELECT * FROM productos WHERE codigoBarras = ?');

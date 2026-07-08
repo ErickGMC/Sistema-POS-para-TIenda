@@ -26,7 +26,10 @@ contextBridge.exposeInMainWorld('electron', {
   // Imprimir
   imprimirSilencioso: (html) => ipcRenderer.invoke('printer:printTicket', html),
   
-  // Sync
+  // Sync & Firebase
+  getFirebaseConfig: () => ipcRenderer.invoke('firebase:getConfig'),
+  setFirebaseConfig: (config) => ipcRenderer.invoke('firebase:setConfig', config),
+  descargarDatosDesdeNube: () => ipcRenderer.invoke('sync:downloadData'),
   startManualSync: () => ipcRenderer.invoke('sync:startManualSync'),
   forzarSincronizacion: () => ipcRenderer.invoke('sync:forzarSincronizacion'),
   obtenerEstadoSync: () => ipcRenderer.invoke('sync:obtenerEstadoSync'),

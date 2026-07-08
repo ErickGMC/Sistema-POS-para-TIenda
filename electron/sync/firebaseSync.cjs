@@ -4,25 +4,73 @@ const { getFirestore, doc, writeBatch, collection, getDocs, query, orderBy, limi
 const { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } = require('firebase/auth');
 const { getStorage, ref, uploadBytes, getDownloadURL } = require('firebase/storage');
 
-// Configuración de Firebase (Del prompt)
-const firebaseConfig = {
-  apiKey: "AIzaSyD0GPWoxJAxMvK6u8ZE1F24CXxJRYvdoxo",
-  authDomain: "minimarket-flor-8d7f9.firebaseapp.com",
-  projectId: "minimarket-flor-8d7f9",
-  storageBucket: "minimarket-flor-8d7f9.firebasestorage.app",
-  messagingSenderId: "519884713211",
-  appId: "1:519884713211:web:294f2cc23a85f0915cd45e",
-  measurementId: "G-RR67HZRXFE"
-};
+const fs = require('fs');
+const path = require('path');
 
-const app = initializeApp(firebaseConfig);
-const firestore = getFirestore(app);
-const auth = getAuth(app);
-const storage = getStorage(app);
+let firebaseConfig = null;
+let app = null;
+let firestore = null;
+let auth = null;
+let storage = null;
+let secondaryApp = null;
+let secondaryAuth = null;
 
-// Secondary app for auth operations to avoid signing out the main app
-const secondaryApp = initializeApp(firebaseConfig, 'SecondaryAuthApp');
-const secondaryAuth = getAuth(secondaryApp);
+function getConfigPath() {
+    const { app: eApp } = require('electron');
+    // En dev guardamos en root para que persista, en prod en userData
+    const dbDir = eApp.isPackaged ? eApp.getPath('userData') : __dirname;
+    return path.join(dbDir, 'firebase_config.json');
+}
+
+function loadConfig() {
+    const configPath = getConfigPath();
+    if (fs.existsSync(configPath)) {
+        try {
+            const data = fs.readFileSync(configPath, 'utf8');
+            firebaseConfig = JSON.parse(data);
+            initFirebase();
+            return true;
+        } catch (e) {
+            console.error('Error loading firebase config', e);
+        }
+    }
+    return false;
+}
+
+function getFirebaseConfig() {
+    return firebaseConfig;
+}
+
+function saveFirebaseConfig(config) {
+    try {
+        const configPath = getConfigPath();
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+        firebaseConfig = config;
+        initFirebase();
+        return { success: true };
+    } catch(e) {
+        return { success: false, error: e.message };
+    }
+}
+
+function initFirebase() {
+    if (!firebaseConfig) return;
+    try {
+        app = initializeApp(firebaseConfig);
+        firestore = getFirestore(app);
+        auth = getAuth(app);
+        storage = getStorage(app);
+        
+        // Secondary app for auth operations to avoid signing out the main app
+        secondaryApp = initializeApp(firebaseConfig, 'SecondaryAuthApp');
+        secondaryAuth = getAuth(secondaryApp);
+    } catch(e) {
+        console.error("Firebase init error:", e);
+    }
+}
+
+// Intentar inicializar al arrancar
+loadConfig();
 
 // Verificar conexión a internet antes de sincronizar
 function isOnline() {
@@ -264,11 +312,95 @@ async function subirImagenStorage(buffer, type, categoria) {
     }
 }
 
+async function descargarDatosDesdeNube() {
+    if (!firestore) return { success: false, error: 'Firebase no está configurado.' };
+    try {
+        // Descargar Productos
+        const prodSnap = await getDocs(collection(firestore, 'productos'));
+        const productos = [];
+        prodSnap.forEach(d => productos.push(d.data()));
+
+        // Descargar Usuarios
+        const userSnap = await getDocs(collection(firestore, 'usuarios'));
+        const usuarios = [];
+        userSnap.forEach(d => usuarios.push(d.data()));
+
+        // Descargar Banners
+        const bannerSnap = await getDocs(collection(firestore, 'banners'));
+        const banners = [];
+        bannerSnap.forEach(d => banners.push(d.data()));
+
+        // Guardar en local de forma transaccional (sqlite db)
+        const stmtInsertProd = db.prepare('INSERT OR REPLACE INTO productos (id, codigoBarras, nombre, descripcion, categoria, precio, costo, stock, unidadMedida, imagenUrl, thumbnailUrl, imagenLocal, thumbnailLocal, disponible, destacado, etiquetas) VALUES (@id, @codigoBarras, @nombre, @descripcion, @categoria, @precio, @costo, @stock, @unidadMedida, @imagenUrl, @thumbnailUrl, @imagenLocal, @thumbnailLocal, @disponible, @destacado, @etiquetas)');
+        
+        const tx = db.transaction(() => {
+            // Usuarios
+            const stmtUser = db.prepare('INSERT OR REPLACE INTO usuarios (id, username, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?)');
+            for (const u of usuarios) {
+                // Generar salt y hash genérico local si no existe (Firebase maneja la auth real, pero SQLite requiere la columna)
+                // Usamos un password default 'sync' ya que login real pasa a firebase
+                const crypto = require('crypto');
+                const salt = crypto.randomBytes(16).toString('hex');
+                const hash = crypto.scryptSync('123456', salt, 64).toString('hex');
+                
+                stmtUser.run(
+                    u.id || u.username, 
+                    u.username, 
+                    hash, 
+                    salt, 
+                    u.role || 'user', 
+                    u.permisos ? JSON.stringify(u.permisos) : null,
+                    u.activo !== undefined ? (u.activo ? 1 : 0) : 1
+                );
+            }
+
+            // Productos
+            for (const p of productos) {
+                stmtInsertProd.run({
+                    id: p.id,
+                    codigoBarras: p.codigoBarras || null,
+                    nombre: p.nombre || '',
+                    descripcion: p.descripcion || null,
+                    categoria: p.categoria || 'Abarrotes',
+                    precio: p.precio !== undefined ? p.precio : 0,
+                    costo: p.costo !== undefined ? p.costo : null,
+                    stock: p.stock !== undefined ? p.stock : 0,
+                    unidadMedida: p.unidadMedida || 'unidad',
+                    imagenUrl: p.imagenUrl || null,
+                    thumbnailUrl: p.thumbnailUrl || null,
+                    imagenLocal: p.imagenLocal || null,
+                    thumbnailLocal: p.thumbnailLocal || null,
+                    disponible: p.disponible ? 1 : 0,
+                    destacado: p.destacado ? 1 : 0,
+                    etiquetas: p.etiquetas ? JSON.stringify(p.etiquetas) : null
+                });
+            }
+
+            // Banners
+            const stmtBanner = db.prepare('INSERT OR REPLACE INTO banners (id, title, subtitle, imageUrl, imagenLocal, badgeText, ctaText, ctaActionCategory, active, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+            for (const b of banners) {
+                stmtBanner.run(
+                    b.id, b.title || '', b.subtitle || null, b.imageUrl || null, b.imagenLocal || null, b.badgeText || null, b.ctaText || 'Ver más', b.ctaActionCategory || null, b.active ? 1 : 0, b.priority || 0
+                );
+            }
+        });
+        
+        tx();
+        return { success: true };
+    } catch (e) {
+        console.error('Error descargando datos:', e);
+        return { success: false, error: e.message };
+    }
+}
+
 module.exports = {
     startSyncWorker,
     sincronizarCola,
-    app,
+    get app() { return app; },
     loginConFirebase,
     obtenerAnalytics,
-    subirImagenStorage
+    subirImagenStorage,
+    getFirebaseConfig,
+    saveFirebaseConfig,
+    descargarDatosDesdeNube
 };

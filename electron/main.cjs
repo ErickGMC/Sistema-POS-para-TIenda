@@ -124,6 +124,21 @@ app.whenReady().then(() => {
     return { success: true };
   });
 
+  ipcMain.handle('firebase:getConfig', () => {
+    const { getFirebaseConfig } = require('./sync/firebaseSync.cjs');
+    return getFirebaseConfig();
+  });
+
+  ipcMain.handle('firebase:setConfig', (event, config) => {
+    const { saveFirebaseConfig } = require('./sync/firebaseSync.cjs');
+    return saveFirebaseConfig(config);
+  });
+
+  ipcMain.handle('sync:downloadData', async () => {
+    const { descargarDatosDesdeNube } = require('./sync/firebaseSync.cjs');
+    return await descargarDatosDesdeNube();
+  });
+
   ipcMain.handle('sync:forzarSincronizacion', async () => {
     const { sincronizarCola } = require('./sync/firebaseSync.cjs');
     await sincronizarCola();

@@ -6,8 +6,9 @@ import Login from './components/auth/Login';
 import HistorialVentas from './components/pos/HistorialVentas';
 import WebAdmin from './components/web/WebAdmin';
 import Dashboard from './components/dashboard/Dashboard';
+import SetupFirebase from './components/auth/SetupFirebase';
 import { useAuthStore } from './store/useAuthStore';
-import { ShoppingCart, Package, Users, LogOut, Cloud, CloudOff, RefreshCw, Check, X, Receipt, Globe, ShieldAlert, BarChart3 } from 'lucide-react';
+import { ShoppingCart, Package, Users, LogOut, Cloud, CloudOff, RefreshCw, Check, X, Receipt, Globe, ShieldAlert, BarChart3, CloudDownload } from 'lucide-react';
 
 function App() {
   const [vistaActiva, setVistaActiva] = useState<'pos' | 'ventas' | 'inventario' | 'usuarios' | 'web' | 'dashboard'>('pos');
@@ -16,9 +17,19 @@ function App() {
   const [pendingCount, setPendingCount] = useState(0);
   const [toastMessage, setToastMessage] = useState<{msg: string, type: 'success'|'error'} | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [isFirebaseConfigured, setIsFirebaseConfigured] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const checkConfig = async () => {
+      const config = await (window as any).electron.getFirebaseConfig();
+      setIsFirebaseConfigured(!!config);
+    };
+    checkConfig();
+  }, []);
 
   const handleManualSync = async () => {
-    if (!online || pendingCount === 0 || isSyncing) return;
+    if (!online || pendingCount === 0 || isSyncing || isDownloading) return;
     setIsSyncing(true);
     showToast("Sincronizando con la nube...", 'success');
     try {
@@ -27,6 +38,27 @@ function App() {
        showToast("Error al invocar la sincronización manual.", 'error');
     } finally {
        setIsSyncing(false);
+    }
+  };
+
+  const handleDownloadCloud = async () => {
+    if (!online || isDownloading || isSyncing) return;
+    if (!window.confirm("¿Estás seguro de que quieres descargar y sobrescribir los datos locales con los de la nube? Esto es ideal para sincronizar un dispositivo nuevo.")) return;
+    
+    setIsDownloading(true);
+    showToast("Descargando base de datos desde la nube...", 'success');
+    try {
+      const res = await (window as any).electron.descargarDatosDesdeNube();
+      if (res.success) {
+        showToast("Descarga completada exitosamente. Recargando la aplicación...", 'success');
+        setTimeout(() => window.location.reload(), 2000);
+      } else {
+        showToast(`Error: ${res.error}`, 'error');
+      }
+    } catch {
+       showToast("Error al invocar la descarga manual.", 'error');
+    } finally {
+       setIsDownloading(false);
     }
   };
 
@@ -90,6 +122,14 @@ function App() {
       else if (user.permisos.includes('web:configurar')) setVistaActiva('web');
     }
   }, [isAuthenticated, user, vistaActiva]);
+
+  if (isFirebaseConfigured === null) {
+    return <div className="h-screen w-screen bg-slate-950 flex items-center justify-center text-white">Cargando...</div>;
+  }
+
+  if (!isFirebaseConfigured) {
+    return <SetupFirebase onSuccess={() => setIsFirebaseConfigured(true)} />;
+  }
 
   if (!isAuthenticated || !user) {
     return <Login />;
@@ -225,6 +265,19 @@ function App() {
         
         {/* Botón de Sincronización en la Nube */}
         <div className="mt-auto flex flex-col items-center gap-4">
+          <button 
+            onClick={handleDownloadCloud}
+            disabled={!online || isDownloading || isSyncing}
+            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 relative group ${
+              !online || isDownloading || isSyncing ? 'cursor-not-allowed opacity-50 bg-slate-800 text-slate-500' : 'cursor-pointer hover:scale-110 shadow-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20'
+            }`}
+          >
+            {isDownloading ? <RefreshCw size={20} className="animate-spin text-indigo-400" /> : <CloudDownload size={20} />}
+            <div className="absolute left-16 bg-slate-900 border border-slate-700 text-slate-100 text-xs px-3 py-1.5 rounded-lg shadow-xl opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-300 whitespace-nowrap z-50">
+              <span className="flex items-center gap-1.5">Descargar Base de Datos</span>
+            </div>
+          </button>
+
           <button 
             onClick={handleManualSync}
             disabled={!online || pendingCount === 0 || isSyncing}

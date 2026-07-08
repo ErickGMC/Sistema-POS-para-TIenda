@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+@layer utilities {
+  /* Scrollbar personalizado para el POS */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #475569;
+    border-radius: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #64748b;
+  }
+}
+
+body {
+  margin: 0;
+  overflow: hidden; /* App estilo Kiosko, no scroll global */
+  user-select: none; /* Prevenir selección de texto accidental */
+}
+
+/* 
+ * Feedback visual global para clicks
+ * Esto aplica un efecto de "hundimiento" a todos los botones e interacciones
+ */
+button, 
+a, 
+[role="button"],
+input[type="submit"],
+.clickable {
+  transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), filter 0.1s ease-in-out;
+}
+
+button:not(:disabled):active, 
+a:not([aria-disabled="true"]):active, 
+[role="button"]:not([aria-disabled="true"]):active,
+input[type="submit"]:not(:disabled):active,
+.clickable:active {
+  transform: scale(0.96);
+  filter: brightness(0.9);
+}

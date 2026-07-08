@@ -1,0 +1,29 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Colecciones públicas (Accesibles para los clientes de la web)
+    match /productos/{document} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    match /banners/{document} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    match /web_config/{document} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    
+    // Colecciones privadas (Solo personal autenticado)
+    match /usuarios/{document} {
+      allow read, write: if request.auth != null;
+    }
+    match /ventas_locales/{document} {
+      allow read, write: if request.auth != null;
+    }
+    match /ventas_locales/{ventaId}/detalle/{document} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

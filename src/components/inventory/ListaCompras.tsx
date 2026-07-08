@@ -1,0 +1,563 @@
+import { useState, useMemo } from 'react';
+import type { Producto } from '../../store/usePosStore';
+import { Search, FileText, MessageCircle, AlertTriangle, Plus, Trash2, ListPlus, Calculator, PackagePlus, Save, History, X } from 'lucide-react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+
+interface ListaComprasProps {
+  productos: Producto[];
+}
+
+interface ItemCompra {
+  producto: Producto;
+  cantidadPedir: number;
+}
+
+export default function ListaCompras({ productos }: ListaComprasProps) {
+  // Filtros del catálogo izquierdo
+  const [searchTerm, setSearchTerm] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('todas');
+  
+  // Estado de la Lista Seleccionada
+  const [itemsCompra, setItemsCompra] = useState<ItemCompra[]>([]);
+  const [mostrarCantidad, setMostrarCantidad] = useState(true);
+
+  // Estados del Historial y Guardado
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [listasGuardadas, setListasGuardadas] = useState<any[]>([]);
+
+  // Categorías únicas
+  const categories = useMemo(() => {
+    const cats = new Set(productos.map(p => p.categoria).filter(Boolean));
+    return Array.from(cats).sort();
+  }, [productos]);
+
+  // Productos filtrados en el catálogo
+  const filteredProducts = useMemo(() => {
+    return productos.filter(p => {
+      const matchesSearch = p.nombre.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                           (p.codigoBarras && p.codigoBarras.includes(searchTerm));
+      const matchesCategory = categoryFilter === 'todas' || p.categoria === categoryFilter;
+      return matchesSearch && matchesCategory;
+    });
+  }, [productos, searchTerm, categoryFilter]);
+
+  // Manejo de la lista
+  const agregarItem = (producto: Producto, cantidad = 1) => {
+    setItemsCompra(prev => {
+      const existe = prev.find(i => i.producto.id === producto.id);
+      if (existe) {
+        return prev.map(i => i.producto.id === producto.id 
+          ? { ...i, cantidadPedir: i.cantidadPedir + cantidad }
+          : i
+        );
+      }
+      return [...prev, { producto, cantidadPedir: Math.max(1, cantidad) }];
+    });
+  };
+
+  const removerItem = (id: string) => {
+    setItemsCompra(prev => prev.filter(i => i.producto.id !== id));
+  };
+
+  const actualizarCantidad = (id: string, cantidad: number) => {
+    if (cantidad <= 0) return;
+    setItemsCompra(prev => prev.map(i => 
+      i.producto.id === id ? { ...i, cantidadPedir: cantidad } : i
+    ));
+  };
+
+  const vaciarLista = () => {
+    if (confirm('¿Estás seguro de vaciar la lista de compras actual?')) {
+      setItemsCompra([]);
+    }
+  };
+
+  const agregarFaltantes = () => {
+    const faltantes = productos.filter(p => p.stock <= 5);
+    let agregados = 0;
+    
+    setItemsCompra(prev => {
+      const nuevos = [...prev];
+      faltantes.forEach(prod => {
+        if (!nuevos.find(i => i.producto.id === prod.id)) {
+          nuevos.push({ producto: prod, cantidadPedir: 10 });
+          agregados++;
+        }
+      });
+      return nuevos;
+    });
+
+    if (agregados > 0) {
+      alert(`Se agregaron ${agregados} productos con stock crítico (≤ 5) a tu lista de compras.`);
+    } else {
+      alert('Todos los productos con bajo stock ya están en tu lista.');
+    }
+  };
+
+  const cargarHistorial = async () => {
+    try {
+      const res = await (window as any).electron.obtenerListasCompras();
+      if (res.success) {
+        setListasGuardadas(res.listas);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const guardarListaActual = async () => {
+    if (itemsCompra.length === 0) return;
+    
+    const defaultName = `Reabastecimiento - ${new Date().toLocaleDateString()}`;
+    const nombre = prompt('Ingresa un nombre para esta lista de compras:', defaultName);
+    if (!nombre) return; // Canceló
+
+    const lista = {
+      id: window.crypto.randomUUID(),
+      nombre,
+      fecha: new Date().toISOString(),
+      total_estimado: costoTotalEstimado
+    };
+
+    const detalles = itemsCompra.map(item => ({
+      id: window.crypto.randomUUID(),
+      producto_id: item.producto.id,
+      cantidad_pedir: item.cantidadPedir,
+      costo_unitario: item.producto.costo || 0
+    }));
+
+    try {
+      const res = await (window as any).electron.guardarListaCompra(lista, detalles);
+      if (res.success) {
+        alert('Lista guardada correctamente. Se sincronizará con la base de datos de Firebase.');
+      } else {
+        alert('Error al guardar: ' + res.error);
+      }
+    } catch (e) {
+      alert('Error de sistema al guardar la lista');
+    }
+  };
+
+  const eliminarListaGuardada = async (id: string) => {
+    if (confirm('¿Seguro que deseas eliminar esta lista guardada?')) {
+      await (window as any).electron.eliminarListaCompra(id);
+      cargarHistorial();
+    }
+  };
+
+  const cargarListaEnEditor = (listaGuardada: any) => {
+    if (itemsCompra.length > 0) {
+      if (!confirm('Tu lista actual se reemplazará por la guardada. ¿Deseas continuar?')) return;
+    }
+    
+    const itemsRestaurados: ItemCompra[] = [];
+    listaGuardada.detalles.forEach((det: any) => {
+      // Buscar el producto original del catálogo por si cambió
+      const prodEnCatalogo = productos.find(p => p.id === det.producto_id);
+      if (prodEnCatalogo) {
+        itemsRestaurados.push({
+          producto: prodEnCatalogo,
+          cantidadPedir: det.cantidad_pedir
+        });
+      }
+    });
+    
+    setItemsCompra(itemsRestaurados);
+    setShowHistoryModal(false);
+  };
+
+  // Cálculos
+  const costoTotalEstimado = useMemo(() => {
+    return itemsCompra.reduce((acc, item) => {
+      const costo = item.producto.costo || 0;
+      return acc + (costo * item.cantidadPedir);
+    }, 0);
+  }, [itemsCompra]);
+
+  // Agrupación de items seleccionados por categoría (Para exportación)
+  const itemsPorCategoria = useMemo(() => {
+    const groups: Record<string, ItemCompra[]> = {};
+    itemsCompra.forEach(item => {
+      const cat = item.producto.categoria || 'Sin Categoría';
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push(item);
+    });
+    return groups;
+  }, [itemsCompra]);
+
+  // Exportación
+  const generateWhatsAppMessage = () => {
+    let message = "🛒 *ORDEN DE COMPRA - MINIMARKET FLOR*\n\n";
+    
+    Object.keys(itemsPorCategoria).sort().forEach(cat => {
+      message += `📦 *${cat.toUpperCase()}*\n`;
+      itemsPorCategoria[cat].forEach(item => {
+        message += `- ${item.producto.nombre}\n`;
+        if (mostrarCantidad) {
+          message += `  Cantidad a pedir: *${item.cantidadPedir} ${item.producto.unidadMedida}*\n`;
+        }
+      });
+      message += `\n`;
+    });
+
+    const url = `https://wa.me/?text=${encodeURIComponent(message)}`;
+    if ((window as any).electron && (window as any).electron.openExternal) {
+      (window as any).electron.openExternal(url);
+    } else {
+      window.open(url, '_blank');
+    }
+  };
+
+  const generatePDF = () => {
+    const doc = new jsPDF();
+    const date = new Date().toLocaleDateString();
+    
+    doc.setFontSize(20);
+    doc.text('Orden de Compra - Minimarket Flor', 14, 22);
+    doc.setFontSize(11);
+    doc.text(`Fecha de generación: ${date}`, 14, 30);
+    if (mostrarCantidad) {
+      doc.text(`Costo Estimado: S/ ${costoTotalEstimado.toFixed(2)}`, 14, 36);
+    }
+
+    let startY = 45;
+
+    Object.keys(itemsPorCategoria).sort().forEach(cat => {
+      doc.setFontSize(14);
+      doc.text(cat.toUpperCase(), 14, startY);
+      
+      let tableData;
+      let headFields;
+
+      if (mostrarCantidad) {
+        headFields = [['Código', 'Producto', 'Stock Actual', 'Cant. Pedir', 'U.M.']];
+        tableData = itemsPorCategoria[cat].map(item => [
+          item.producto.codigoBarras || 'S/C',
+          item.producto.nombre,
+          item.producto.stock.toString(),
+          item.cantidadPedir.toString(),
+          item.producto.unidadMedida
+        ]);
+      } else {
+        headFields = [['Código', 'Producto', 'Stock Actual', 'U.M.']];
+        tableData = itemsPorCategoria[cat].map(item => [
+          item.producto.codigoBarras || 'S/C',
+          item.producto.nombre,
+          item.producto.stock.toString(),
+          item.producto.unidadMedida
+        ]);
+      }
+
+      autoTable(doc, {
+        startY: startY + 5,
+        head: headFields,
+        body: tableData,
+        theme: 'striped',
+        headStyles: { fillColor: [16, 185, 129] }, // Emerald 500
+        margin: { top: 10 },
+      });
+
+      startY = (doc as any).lastAutoTable.finalY + 15;
+    });
+
+    // Guardar el archivo usando método estándar
+    const fileName = `Orden_Compra_${date.replace(/\//g, '-')}.pdf`;
+    
+    // El save de jsPDF debería funcionar con HTML5 a:download link de fondo en Electron si no hay bloqueos.
+    try {
+      doc.save(fileName);
+    } catch (err) {
+      // Si falla, como fallback generamos el ArrayBuffer e invocamos un link temporal
+      console.warn("Fallo en doc.save, usando fallback", err);
+      const output = doc.output('blob');
+      const url = URL.createObjectURL(output);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+  };
+
+  return (
+    <div className="h-full flex flex-row bg-slate-900 overflow-hidden relative">
+      
+      {/* MODAL DEL HISTORIAL */}
+      {showHistoryModal && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="p-5 border-b border-slate-700 flex justify-between items-center bg-slate-800/80">
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                <History className="text-emerald-400" />
+                Historial de Listas Guardadas
+              </h2>
+              <button onClick={() => setShowHistoryModal(false)} className="text-slate-400 hover:text-white p-1 rounded transition">
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+              {listasGuardadas.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-slate-500 italic">
+                  No tienes listas guardadas en el historial.
+                </div>
+              ) : (
+                <div className="grid gap-3">
+                  {listasGuardadas.map(lista => (
+                    <div key={lista.id} className="bg-slate-900 border border-slate-700 rounded-xl p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                      <div>
+                        <div className="font-bold text-lg text-slate-200">{lista.nombre}</div>
+                        <div className="text-sm text-slate-400 flex items-center gap-3 mt-1">
+                          <span>{new Date(lista.fecha).toLocaleDateString()} {new Date(lista.fecha).toLocaleTimeString()}</span>
+                          <span className="bg-slate-800 px-2 py-0.5 rounded-full text-xs border border-slate-700">{lista.detalles.length} productos</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-amber-400 mr-2 text-lg">S/ {lista.total_estimado.toFixed(2)}</span>
+                        <button onClick={() => cargarListaEnEditor(lista)} className="bg-blue-600/20 text-blue-400 hover:bg-blue-600 hover:text-white px-4 py-2 rounded-lg font-semibold transition border border-blue-500/30">
+                          Cargar
+                        </button>
+                        <button onClick={() => eliminarListaGuardada(lista.id)} className="bg-rose-600/10 text-rose-400 hover:bg-rose-600 hover:text-white p-2 rounded-lg transition border border-rose-500/20">
+                          <Trash2 size={20} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PANEL IZQUIERDO: CATÁLOGO Y BUSCADOR */}
+      <div className="w-1/2 flex flex-col border-r border-slate-700">
+        
+        {/* Cabecera del Buscador */}
+        <div className="p-4 bg-slate-800 shadow-md z-10 flex flex-col gap-3 border-b border-slate-700">
+          <div className="flex justify-between items-center">
+            <h2 className="text-lg font-bold text-slate-200 flex items-center gap-2">
+              <PackagePlus className="text-emerald-400" />
+              Catálogo de Productos
+            </h2>
+            <div className="flex gap-2">
+              <button 
+                onClick={() => { cargarHistorial(); setShowHistoryModal(true); }}
+                className="text-xs bg-slate-700 text-slate-300 hover:bg-slate-600 hover:text-white px-3 py-1.5 rounded-lg transition font-semibold flex items-center gap-1"
+              >
+                <History size={14} /> Historial
+              </button>
+              <button 
+                onClick={agregarFaltantes}
+                className="text-xs bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 px-3 py-1.5 rounded-lg transition font-semibold"
+                title="Añadir automáticamente todos los productos con stock 5 o menos"
+              >
+                + Sugerir Faltantes
+              </button>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-2.5 text-slate-500" size={18} />
+              <input 
+                type="text" 
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                placeholder="Buscar por nombre o código..." 
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-4 py-2 text-white focus:border-emerald-500 outline-none transition text-sm" 
+              />
+            </div>
+            <select 
+              value={categoryFilter}
+              onChange={e => setCategoryFilter(e.target.value)}
+              className="w-40 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-emerald-500 outline-none transition appearance-none text-sm"
+            >
+              <option value="todas">Todas las categorías</option>
+              {categories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* Lista del Catálogo */}
+        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+          {filteredProducts.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-slate-500 italic text-center px-4">
+              <AlertTriangle size={32} className="mb-2 opacity-50" />
+              No se encontraron productos.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {filteredProducts.map(prod => (
+                <div key={prod.id} className="bg-slate-800 border border-slate-700 hover:border-emerald-500/50 rounded-lg p-3 flex items-center gap-3 transition group">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-slate-200 text-sm truncate">{prod.nombre}</div>
+                    <div className="flex items-center gap-3 mt-1 text-xs">
+                      <span className="text-slate-500 font-mono">{prod.codigoBarras || 'S/C'}</span>
+                      <span className={`font-bold ${prod.stock <= 5 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                        Stock: {prod.stock}
+                      </span>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => agregarItem(prod, 1)}
+                    className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-500 border border-emerald-500/30 flex items-center justify-center hover:bg-emerald-500 hover:text-slate-900 transition flex-shrink-0 group-hover:scale-105"
+                    title="Añadir a la lista"
+                  >
+                    <Plus size={20} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* PANEL DERECHO: ORDEN DE COMPRA */}
+      <div className="w-1/2 flex flex-col bg-slate-900 relative">
+        <div className="p-5 bg-slate-800 border-b border-slate-700 flex flex-col gap-3 shadow-md z-10">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-bold flex items-center gap-2">
+              <ListPlus className="text-emerald-400" />
+              Mi Lista
+            </h2>
+            <div className="flex gap-2">
+              {itemsCompra.length > 0 && (
+                <>
+                  <button 
+                    onClick={guardarListaActual}
+                    className="text-xs text-blue-400 hover:text-white font-semibold uppercase tracking-wider bg-blue-500/10 hover:bg-blue-600 px-3 py-1.5 rounded-lg border border-blue-500/30 transition flex items-center gap-1"
+                  >
+                    <Save size={14} /> Guardar
+                  </button>
+                  <button 
+                    onClick={vaciarLista}
+                    className="text-xs text-rose-400 hover:text-white font-semibold uppercase tracking-wider bg-rose-500/10 hover:bg-rose-600 px-3 py-1.5 rounded-lg border border-rose-500/30 transition"
+                  >
+                    Vaciar
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+          
+          <div className="flex items-center justify-between pt-2 border-t border-slate-700/50">
+            <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-300">
+              <input 
+                type="checkbox" 
+                checked={mostrarCantidad}
+                onChange={(e) => setMostrarCantidad(e.target.checked)}
+                className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+              />
+              Incluir "Cantidad a pedir"
+            </label>
+          </div>
+        </div>
+        
+        {/* Items Seleccionados */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+          {itemsCompra.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-slate-500 italic text-center px-8">
+              <div className="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center mb-4">
+                <ListPlus size={32} className="text-slate-600" />
+              </div>
+              <p>Tu lista está vacía.</p>
+              <p className="text-sm mt-2">Busca productos en el catálogo de la izquierda y presiona el botón "+" para agregarlos aquí.</p>
+            </div>
+          ) : (
+            itemsCompra.map((item) => (
+              <div key={item.producto.id} className="flex flex-col bg-slate-800 p-3 rounded-lg border border-slate-700/50 hover:border-slate-600 transition">
+                <div className="flex justify-between items-start mb-2">
+                  <div className="font-semibold text-slate-200 pr-2 leading-tight">
+                    {item.producto.nombre}
+                  </div>
+                  <button 
+                    onClick={() => removerItem(item.producto.id)} 
+                    className="text-slate-500 hover:text-red-400 p-1 hover:bg-red-400/10 rounded transition flex-shrink-0"
+                    title="Remover"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+                
+                <div className="flex justify-between items-end mt-auto">
+                  {mostrarCantidad ? (
+                    <div className="flex flex-col">
+                      <span className="text-[10px] text-slate-500 uppercase font-semibold mb-1">Cant. a Pedir</span>
+                      <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
+                        <button 
+                          onClick={() => actualizarCantidad(item.producto.id, item.cantidadPedir - 1)}
+                          className="w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold transition-colors"
+                        >-</button>
+                        <input 
+                          type="number" 
+                          min="1"
+                          step={item.producto.unidadMedida === 'unidad' ? '1' : '0.1'}
+                          value={item.cantidadPedir}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            if (!isNaN(val)) actualizarCantidad(item.producto.id, val);
+                          }}
+                          className="w-16 h-8 text-center bg-transparent text-emerald-400 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        /> 
+                        <button 
+                          onClick={() => actualizarCantidad(item.producto.id, item.cantidadPedir + 1)}
+                          className="w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold transition-colors"
+                        >+</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-slate-500 text-sm">
+                      {item.producto.categoria}
+                    </div>
+                  )}
+                  
+                  <div className="text-right">
+                    <div className="text-[10px] text-slate-500 mb-0.5">Stock Actual: <strong className={item.producto.stock <= 5 ? 'text-rose-400' : 'text-slate-300'}>{item.producto.stock}</strong></div>
+                    {mostrarCantidad && (
+                      <div className="text-xs text-slate-400">
+                        Costo aprox: S/ {((item.producto.costo || 0) * item.cantidadPedir).toFixed(2)}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+        
+        {/* Footer (Totales y Exportación) */}
+        <div className="bg-slate-800 p-5 border-t border-slate-700 shadow-[0_-10px_30px_rgba(0,0,0,0.3)]">
+          {mostrarCantidad && (
+            <div className="flex justify-between items-center mb-4 px-2">
+              <div className="flex items-center gap-2 text-slate-400">
+                <Calculator size={18} />
+                <span className="text-sm font-semibold uppercase tracking-wider">Inversión Estimada</span>
+              </div>
+              <span className="text-3xl font-black text-amber-400">S/ {costoTotalEstimado.toFixed(2)}</span>
+            </div>
+          )}
+          
+          <div className="grid grid-cols-2 gap-3">
+            <button 
+              onClick={generateWhatsAppMessage}
+              disabled={itemsCompra.length === 0}
+              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold py-3 rounded-xl transition flex justify-center items-center gap-2 shadow-lg shadow-emerald-500/20 active:scale-[0.98]"
+            >
+              <MessageCircle size={20} />
+              Enviar WhatsApp
+            </button>
+            <button 
+              onClick={generatePDF}
+              disabled={itemsCompra.length === 0}
+              className="w-full bg-rose-600 hover:bg-rose-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold py-3 rounded-xl transition flex justify-center items-center gap-2 shadow-lg shadow-rose-500/20 active:scale-[0.98]"
+            >
+              <FileText size={20} />
+              Generar PDF
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

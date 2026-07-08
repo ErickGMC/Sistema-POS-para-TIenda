@@ -1,0 +1,274 @@
+const { db } = require('../database/db.cjs');
+const { initializeApp } = require('firebase/app');
+const { getFirestore, doc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField } = require('firebase/firestore');
+const { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } = require('firebase/auth');
+const { getStorage, ref, uploadBytes, getDownloadURL } = require('firebase/storage');
+
+// Configuración de Firebase (Del prompt)
+const firebaseConfig = {
+  apiKey: "AIzaSyD0GPWoxJAxMvK6u8ZE1F24CXxJRYvdoxo",
+  authDomain: "minimarket-flor-8d7f9.firebaseapp.com",
+  projectId: "minimarket-flor-8d7f9",
+  storageBucket: "minimarket-flor-8d7f9.firebasestorage.app",
+  messagingSenderId: "519884713211",
+  appId: "1:519884713211:web:294f2cc23a85f0915cd45e",
+  measurementId: "G-RR67HZRXFE"
+};
+
+const app = initializeApp(firebaseConfig);
+const firestore = getFirestore(app);
+const auth = getAuth(app);
+const storage = getStorage(app);
+
+// Secondary app for auth operations to avoid signing out the main app
+const secondaryApp = initializeApp(firebaseConfig, 'SecondaryAuthApp');
+const secondaryAuth = getAuth(secondaryApp);
+
+// Verificar conexión a internet antes de sincronizar
+function isOnline() {
+    return new Promise((resolve) => {
+        require('dns').lookup('google.com', function(err) {
+            if (err) {
+               resolve(false);
+            } else {
+               resolve(true);
+            }
+        });
+    });
+}
+
+// Background Worker: Sincronizar cola
+async function sincronizarCola() {
+    const online = await isOnline();
+    if (!online) {
+        console.log('Offline: No se puede sincronizar.');
+        return;
+    }
+
+    // Obtener registros pendientes (estado_sync = 0)
+    const registros = db.prepare('SELECT * FROM sync_queue WHERE estado_sync = 0 ORDER BY fecha_creacion ASC').all();
+    
+    if (registros.length === 0) return;
+    
+    console.log(`Iniciando sincronización de ${registros.length} registros...`);
+
+    const batch = writeBatch(firestore);
+    const registrosProcesados = [];
+
+    for (const reg of registros) {
+        try {
+            const data = JSON.parse(reg.datos_json);
+            
+            if (reg.entidad === 'venta') {
+                const docRef = doc(firestore, 'ventas_locales', reg.entidad_id);
+                batch.set(docRef, data.venta);
+                
+                // Los detalles podrían ir en subcolecciones, o como array
+                const detalleRef = doc(firestore, `ventas_locales/${reg.entidad_id}/detalle`, 'items');
+                batch.set(detalleRef, { items: data.detalle });
+            } else if (reg.entidad === 'producto') {
+                const docRef = doc(firestore, 'productos', reg.entidad_id);
+                if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
+                    let finalData = { ...data };
+                    
+                    // Si hay una imagen local pendiente y NO hay URL (es nueva), subirla a Storage
+                    if (finalData.imagenLocal && !finalData.imagenUrl) {
+                        const base64Data = finalData.imagenLocal.replace(/^data:image\/\w+;base64,/, '');
+                        const imageBuffer = Buffer.from(base64Data, 'base64');
+                        const uploadRes = await subirImagenStorage(imageBuffer, 'producto', finalData.categoria);
+                        
+                        if (uploadRes.success) {
+                            finalData.imagenUrl = uploadRes.url;
+                            
+                            // Actualizar la base de datos local con la URL pública, pero SIN borrar la imagenLocal
+                            db.prepare('UPDATE productos SET imagenUrl = ? WHERE id = ?')
+                              .run(uploadRes.url, finalData.id);
+                        }
+                    }
+                    
+                    // IMPORTANTE: Eliminar la cadena pesada Base64 y fields obsoletos para que se borren en Firestore
+                    finalData.imagenLocal = deleteField();
+                    finalData.thumbnailLocal = deleteField();
+                    finalData.thumbnailUrl = deleteField();
+                    
+                    batch.set(docRef, finalData, { merge: true });
+                } else if (reg.operacion === 'DELETE') {
+                    batch.delete(docRef);
+                }
+            } else if (reg.entidad === 'usuario') {
+                const docRef = doc(firestore, 'usuarios', reg.entidad_id);
+                const { password, ...usuarioData } = data;
+                
+                if (reg.operacion === 'INSERT') {
+                    let email = usuarioData.email || usuarioData.username;
+                    if (!email.includes('@')) {
+                        email = `${email}@minimarketflor.com`;
+                    }
+                    
+                    try {
+                        await createUserWithEmailAndPassword(secondaryAuth, email, password || 'admin123');
+                    } catch (authErr) {
+                        if (authErr.code !== 'auth/email-already-in-use') {
+                            throw authErr;
+                        }
+                    }
+                    batch.set(docRef, usuarioData, { merge: true });
+                } else if (reg.operacion === 'UPDATE') {
+                    batch.set(docRef, usuarioData, { merge: true });
+                } else if (reg.operacion === 'DELETE') {
+                    batch.delete(docRef);
+                }
+                
+                // Remove password from local sync_queue for security
+                if (password) {
+                    db.prepare("UPDATE sync_queue SET datos_json = ? WHERE id = ?").run(JSON.stringify(usuarioData), reg.id);
+                }
+            } else if (reg.entidad === 'web_config') {
+                const docRef = doc(firestore, 'web_config', reg.entidad_id);
+                batch.set(docRef, data, { merge: true });
+            } else if (reg.entidad === 'banner') {
+                const docRef = doc(firestore, 'banners', reg.entidad_id);
+                if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
+                    let finalData = { ...data };
+                    
+                    if (finalData.imagenLocal && (!finalData.imageUrl || finalData.imageUrl === 'PENDIENTE')) {
+                        const base64Data = finalData.imagenLocal.replace(/^data:image\/\w+;base64,/, '');
+                        const imageBuffer = Buffer.from(base64Data, 'base64');
+                        const uploadRes = await subirImagenStorage(imageBuffer, 'banner', 'general');
+                        
+                        if (uploadRes.success) {
+                            finalData.imageUrl = uploadRes.url;
+                            
+                            db.prepare('UPDATE banners SET imageUrl = ? WHERE id = ?')
+                              .run(uploadRes.url, finalData.id);
+                        }
+                    }
+                    
+                    finalData.imagenLocal = deleteField();
+                    
+                    batch.set(docRef, finalData, { merge: true });
+                } else if (reg.operacion === 'DELETE') {
+                    batch.delete(docRef);
+                }
+            } else if (reg.entidad === 'lista_compra') {
+                const docRef = doc(firestore, 'compras_listas', reg.entidad_id);
+                if (reg.operacion === 'CREATE' || reg.operacion === 'UPDATE') {
+                    batch.set(docRef, data, { merge: true });
+                } else if (reg.operacion === 'DELETE') {
+                    batch.delete(docRef);
+                }
+            }
+
+            registrosProcesados.push(reg.id);
+        } catch (e) {
+            console.error('Error parseando JSON de sync:', e);
+            db.prepare('UPDATE sync_queue SET intentos = intentos + 1 WHERE id = ?').run(reg.id);
+        }
+    }
+
+    if (registrosProcesados.length > 0) {
+        try {
+            await batch.commit();
+            // Marcar como completados
+            const updateStmt = db.prepare('UPDATE sync_queue SET estado_sync = 1 WHERE id = ?');
+            const tx = db.transaction((ids) => {
+                for (const id of ids) updateStmt.run(id);
+            });
+            tx(registrosProcesados);
+            console.log(`Sincronización completada de ${registrosProcesados.length} registros.`);
+            
+            // Emitir evento a todas las ventanas
+            const { BrowserWindow } = require('electron');
+            BrowserWindow.getAllWindows().forEach(win => {
+                if (!win.isDestroyed()) {
+                    win.webContents.send('sync:completado', registrosProcesados.length);
+                }
+            });
+        } catch (error) {
+            console.error('Error al comitear a Firestore:', error);
+            // Incrementar intentos en caso de falla
+            const errStmt = db.prepare('UPDATE sync_queue SET intentos = intentos + 1 WHERE id = ?');
+            const txErr = db.transaction((ids) => {
+                for (const id of ids) errStmt.run(id);
+            });
+            txErr(registrosProcesados);
+
+            // Emitir evento de error
+            const { BrowserWindow } = require('electron');
+            BrowserWindow.getAllWindows().forEach(win => {
+                if (!win.isDestroyed()) {
+                    win.webContents.send('sync:error', error.message);
+                }
+            });
+        }
+    }
+}
+
+// Función mantenida por compatibilidad pero ya no inicia intervalos
+function startSyncWorker() {
+    console.log("Worker automático desactivado. Usar sincronización manual.");
+}
+
+async function loginConFirebase(email, password, allowCreate = false) {
+    try {
+        let loginEmail = email;
+        if (!loginEmail.includes('@')) {
+            loginEmail = `${loginEmail}@minimarketflor.com`;
+        }
+        try {
+            const userCredential = await signInWithEmailAndPassword(auth, loginEmail, password);
+            return { success: true, uid: userCredential.user.uid, email: userCredential.user.email };
+        } catch (err) {
+            // Si las credenciales fallan pero pasamos el login local (allowCreate), el usuario no existe en Firebase o su contraseña se desincronizó
+            if (allowCreate && (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/invalid-login-credentials')) {
+                const userCredential = await createUserWithEmailAndPassword(auth, loginEmail, password);
+                return { success: true, uid: userCredential.user.uid, email: userCredential.user.email, isNew: true };
+            }
+            throw err;
+        }
+    } catch (err) {
+        console.error("Error in loginConFirebase:", err);
+        return { success: false, error: err.message, code: err.code };
+    }
+}
+
+async function obtenerAnalytics() {
+    try {
+        const q = query(collection(firestore, 'analytics_events'), orderBy('timestamp', 'desc'), limit(1000));
+        const snapshot = await getDocs(q);
+        const events = [];
+        snapshot.forEach(doc => {
+            events.push({ id: doc.id, ...doc.data() });
+        });
+        return { success: true, events };
+    } catch (err) {
+        console.error("Error obteniendo analytics:", err);
+        return { success: false, error: err.message };
+    }
+}
+
+async function subirImagenStorage(buffer, type, categoria) {
+    try {
+        const catCode = categoria ? categoria.substring(0, 3).toUpperCase().replace(/[^A-Z]/g, '') : 'GEN';
+        const unique = Math.random().toString(36).substring(2, 6).toUpperCase();
+        const fileName = `${type}s/${catCode}-${unique}.webp`;
+        
+        const storageRef = ref(storage, fileName);
+        await uploadBytes(storageRef, buffer, { contentType: 'image/webp' });
+        
+        const url = await getDownloadURL(storageRef);
+        return { success: true, url };
+    } catch (error) {
+        console.error('Error subiendo imagen a Storage:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+module.exports = {
+    startSyncWorker,
+    sincronizarCola,
+    app,
+    loginConFirebase,
+    obtenerAnalytics,
+    subirImagenStorage
+};

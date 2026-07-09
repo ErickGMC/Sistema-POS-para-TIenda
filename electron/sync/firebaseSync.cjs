@@ -1,5 +1,5 @@
 const { db } = require('../database/db.cjs');
-const { initializeApp } = require('firebase/app');
+const { initializeApp, deleteApp, getApps } = require('firebase/app');
 const { getFirestore, doc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField } = require('firebase/firestore');
 const { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } = require('firebase/auth');
 const { getStorage, ref, uploadBytes, getDownloadURL } = require('firebase/storage');
@@ -56,6 +56,13 @@ function saveFirebaseConfig(config) {
 function initFirebase() {
     if (!firebaseConfig) return;
     try {
+        // Si ya existen instancias previas de Firebase en el proceso principal,
+        // debemos eliminarlas antes de volver a inicializar con el nuevo proyecto.
+        const apps = getApps();
+        for (const existingApp of apps) {
+            deleteApp(existingApp).catch(e => console.error("Error al limpiar app de Firebase:", e));
+        }
+
         app = initializeApp(firebaseConfig);
         firestore = getFirestore(app);
         auth = getAuth(app);

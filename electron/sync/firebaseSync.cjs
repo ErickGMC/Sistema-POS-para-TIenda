@@ -41,8 +41,32 @@ function getFirebaseConfig() {
     return firebaseConfig;
 }
 
-function saveFirebaseConfig(config) {
+async function saveFirebaseConfig(config) {
     try {
+        // Validación de Conexión: Intentamos conectarnos a la base de datos con estas credenciales
+        try {
+            const tempApp = initializeApp(config, 'TempValidationApp');
+            const tempFirestore = getFirestore(tempApp);
+            
+            // Intentamos leer un documento de la colección productos que debe tener 'allow read: if true;'
+            await withTimeout(
+                getDocs(query(collection(tempFirestore, 'productos'), limit(1))),
+                7000, // 7 segundos máximo
+                "Tiempo de espera agotado al verificar las credenciales de Firebase."
+            );
+            
+            await deleteApp(tempApp);
+        } catch (validationErr) {
+            console.error("Fallo la validación de Firebase Config:", validationErr);
+            let userMsg = validationErr.message;
+            if (validationErr.code === 'permission-denied') {
+                userMsg = "Permisos denegados (permission-denied). Asegúrate de haber publicado las Reglas de Seguridad en Firestore.";
+            } else if (validationErr.code?.includes('invalid-api-key') || (validationErr.message && validationErr.message.includes('API key'))) {
+                userMsg = "El API Key de tu configuración es inválido. Revisa tu archivo JSON.";
+            }
+            return { success: false, error: `Error de Validación: ${userMsg}` };
+        }
+
         const configPath = getConfigPath();
         fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
         firebaseConfig = config;
@@ -170,11 +194,11 @@ async function sincronizarCola() {
             const data = JSON.parse(reg.datos_json);
             
             if (reg.entidad === 'venta') {
-                const docRef = doc(firestore, 'ventas_locales', reg.entidad_id);
+                const docRef = doc(firestore, 'ventas', reg.entidad_id);
                 batch.set(docRef, data.venta);
                 
                 // Los detalles podrían ir en subcolecciones, o como array
-                const detalleRef = doc(firestore, `ventas_locales/${reg.entidad_id}/detalle`, 'items');
+                const detalleRef = doc(firestore, `ventas/${reg.entidad_id}/detalle`, 'items');
                 batch.set(detalleRef, { items: data.detalle });
             } else if (reg.entidad === 'producto') {
                 const docRef = doc(firestore, 'productos', reg.entidad_id);
@@ -415,7 +439,7 @@ async function descargarDatosDesdeNube() {
 
         // 4. Descargar Ventas y Detalles en memoria
         const ventasList = [];
-        const ventasSnap = await getDocs(collection(firestore, 'ventas_locales'));
+        const ventasSnap = await getDocs(collection(firestore, 'ventas'));
         
         for (const docSnap of ventasSnap.docs) {
             const v = docSnap.data();
@@ -423,7 +447,7 @@ async function descargarDatosDesdeNube() {
             const detalles = [];
             
             // Descargar los detalles de cada venta de forma anticipada
-            const detallesSnap = await getDocs(collection(firestore, `ventas_locales/${ventaId}/detalle`));
+            const detallesSnap = await getDocs(collection(firestore, `ventas/${ventaId}/detalle`));
             detallesSnap.forEach(detDoc => {
                 const detData = detDoc.data();
                 if (detData && Array.isArray(detData.items)) {

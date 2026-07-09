@@ -145,9 +145,9 @@ app.whenReady().then(() => {
     return getFirebaseConfig();
   });
 
-  ipcMain.handle('firebase:setConfig', (event, config) => {
+  ipcMain.handle('firebase:setConfig', async (event, config) => {
     const { saveFirebaseConfig } = require('./sync/firebaseSync.cjs');
-    return saveFirebaseConfig(config);
+    return await saveFirebaseConfig(config);
   });
 
   ipcMain.handle('sync:downloadData', async () => {

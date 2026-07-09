@@ -96,47 +96,8 @@ function initFirebase() {
         secondaryApp = initializeApp(firebaseConfig, 'SecondaryAuthApp');
         secondaryAuth = getAuth(secondaryApp);
 
-        // Auto-login del Sync Worker para evitar PERMISSION_DENIED
-        autoLoginSyncWorker();
     } catch(e) {
         console.error("Firebase init error:", e);
-    }
-}
-
-async function autoLoginSyncWorker() {
-    try {
-        const crypto = require('crypto');
-        // Generamos un email dinámico y único basado en el ID del proyecto Firebase del cliente
-        const syncEmail = `sync_worker@${firebaseConfig.projectId}.firebaseapp.com`;
-        
-        // Generamos una contraseña determinista basada en el apiKey del proyecto
-        // Esto previene fallos si se reinstala la app o se borra la configuración local
-        const syncPassword = crypto.createHash('sha256').update(firebaseConfig.apiKey).digest('hex').slice(0, 20);
-
-        try {
-            await signInWithEmailAndPassword(auth, syncEmail, syncPassword);
-            console.log("Sync Worker autenticado correctamente.");
-        } catch (err) {
-            // Si el usuario no existe, lo creamos
-            if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/invalid-login-credentials') {
-                try {
-                    await createUserWithEmailAndPassword(auth, syncEmail, syncPassword);
-                    console.log("Sync Worker account creado y autenticado.");
-                } catch (createErr) {
-                    // Si el correo ya existía (por ejemplo, contraseña desincronizada en la nube), 
-                    // no detenemos la ejecución, pero informamos del inconveniente
-                    if (createErr.code === 'auth/email-already-in-use') {
-                        console.error("El usuario de sincronización ya existe en Firebase, pero la contraseña no coincide. Por favor, elimínalo de Firebase Auth para que se vuelva a crear.");
-                    } else {
-                        throw createErr;
-                    }
-                }
-            } else {
-                throw err;
-            }
-        }
-    } catch (e) {
-        console.error("Error en autoLoginSyncWorker:", e);
     }
 }
 

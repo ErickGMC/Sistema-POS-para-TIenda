@@ -52,43 +52,53 @@ app.whenReady().then(() => {
   
   // --- IPC Handlers (Auth y Usuarios) ---
   ipcMain.handle('auth:login', async (_, { username, password }) => {
-    // 1. Intentar login local en SQLite
-    const localRes = db.login(username, password);
-    if (localRes.success) {
-      // 1.5. Iniciar sesión en Firebase también (en segundo plano) para habilitar permisos de escritura en la sincronización
+    let finalRes = { success: false, error: 'Credenciales inválidas' };
+    let localRes = db.login(username, password);
+
+    const { loginConFirebase, descargarDatosDesdeNube } = require('./sync/firebaseSync.cjs');
+    
+    // Función para auto-descargar si la base local está vacía
+    const tryAutoDownload = async () => {
       try {
-        const { loginConFirebase } = require('./sync/firebaseSync.cjs');
-        loginConFirebase(username, password, true).catch(e => console.error("Error background auth firebase:", e));
+        const prodCount = db.obtenerTodosProductos().length;
+        if (prodCount === 0) {
+          console.log("Base de datos local vacía. Auto-descargando desde la nube tras login exitoso...");
+          await descargarDatosDesdeNube();
+        }
+      } catch(e) { console.error("Error en auto-descarga:", e); }
+    };
+
+    if (localRes.success) {
+      finalRes = localRes;
+      try {
+        await loginConFirebase(username, password, true); // Sincroniza auth con Firebase, crea si es admin inicial
+        await tryAutoDownload();
       } catch (e) {
-        console.error("Error al cargar loginConFirebase:", e);
+        console.error("Error background auth firebase:", e);
       }
-      return localRes;
+    } else {
+      // 2. Si falla localmente, intentar con Firebase Auth
+      try {
+        const fbRes = await loginConFirebase(username, password, false);
+        if (fbRes.success) {
+          const registrarRes = db.registrarUsuarioDesdeFirebase(fbRes.uid, username, password, 'admin');
+          if (registrarRes.success) {
+            finalRes = db.login(username, password);
+            await tryAutoDownload();
+          }
+        } else {
+          if (fbRes.code === 'auth/wrong-password' || fbRes.code === 'auth/invalid-credential' || fbRes.code === 'auth/invalid-login-credentials') {
+            finalRes = { success: false, error: 'Contraseña incorrecta' };
+          } else if (fbRes.code === 'auth/user-not-found' || fbRes.code === 'auth/invalid-email') {
+            finalRes = { success: false, error: 'Usuario incorrecto' };
+          }
+        }
+      } catch (e) {
+        console.error('Error en login Firebase:', e);
+      }
     }
     
-    // 2. Si falla localmente (por ejemplo, el admin se creó directamente en la nube), intentar con Firebase Auth
-    try {
-      const { loginConFirebase } = require('./sync/firebaseSync.cjs');
-      const fbRes = await loginConFirebase(username, password, false);
-      
-      if (fbRes.success) {
-        // Registrar localmente para permitir login offline en el futuro
-        const registrarRes = db.registrarUsuarioDesdeFirebase(fbRes.uid, username, password, 'admin');
-        if (registrarRes.success) {
-          // Volver a iniciar sesión localmente con las credenciales registradas
-          return db.login(username, password);
-        }
-      } else {
-        if (fbRes.code === 'auth/wrong-password' || fbRes.code === 'auth/invalid-credential' || fbRes.code === 'auth/invalid-login-credentials') {
-          return { success: false, error: 'Contraseña incorrecta' };
-        } else if (fbRes.code === 'auth/user-not-found' || fbRes.code === 'auth/invalid-email') {
-          return { success: false, error: 'Usuario incorrecto' };
-        }
-      }
-    } catch (e) {
-      console.error('Error en login Firebase:', e);
-    }
-    
-    return localRes; // Si falla la red o las credenciales de Firebase, retornar el error local original
+    return finalRes;
   });
   ipcMain.handle('usuarios:obtener', async () => {
     try {

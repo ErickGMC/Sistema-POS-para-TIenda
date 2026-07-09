@@ -180,16 +180,19 @@ function actualizarProducto(producto, isFromSync = false) {
             etiquetas: producto.etiquetas ? JSON.stringify(producto.etiquetas) : null
         };
         
-        stmt.run(data);
+        const info = stmt.run(data);
         
-        // Agregar a Sync Queue solo si no viene de Firestore
-        if (!isFromSync) {
-            db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
-                'producto', data.id, 'UPDATE', JSON.stringify(data)
-            );
+        if (info.changes > 0) {
+            // Agregar a Sync Queue solo si no viene de Firestore
+            if (!isFromSync) {
+                db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
+                    'producto', data.id, 'UPDATE', JSON.stringify(data)
+                );
+            }
+            return { success: true };
+        } else {
+            return { success: false, error: 'Producto no encontrado' };
         }
-        
-        return { success: true };
     } catch (err) {
         return { success: false, error: err.message };
     }
@@ -197,16 +200,19 @@ function actualizarProducto(producto, isFromSync = false) {
 
 function eliminarProducto(id, isFromSync = false) {
     try {
-        db.prepare('DELETE FROM productos WHERE id = ?').run(id);
+        const info = db.prepare('DELETE FROM productos WHERE id = ?').run(id);
         
-        // Agregar a Sync Queue solo si no viene de Firestore
-        if (!isFromSync) {
-            db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
-                'producto', id, 'DELETE', JSON.stringify({ id })
-            );
+        if (info.changes > 0) {
+            // Agregar a Sync Queue solo si no viene de Firestore
+            if (!isFromSync) {
+                db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
+                    'producto', id, 'DELETE', JSON.stringify({ id })
+                );
+            }
+            return { success: true };
+        } else {
+            return { success: false, error: 'Producto no encontrado' };
         }
-        
-        return { success: true };
     } catch (err) {
         return { success: false, error: err.message };
     }
@@ -277,26 +283,30 @@ function crearUsuario(userData, password) {
 function actualizarUsuario(userData, newPassword = null) {
     try {
         const activoVal = userData.activo !== undefined ? (userData.activo ? 1 : 0) : 1;
+        let info;
         if (newPassword && newPassword.trim() !== '') {
             const { salt, hash } = hashPassword(newPassword);
-            db.prepare('UPDATE usuarios SET username = ?, role = ?, permisos = ?, password_hash = ?, salt = ?, activo = ? WHERE id = ?').run(
+            info = db.prepare('UPDATE usuarios SET username = ?, role = ?, permisos = ?, password_hash = ?, salt = ?, activo = ? WHERE id = ?').run(
                 userData.username, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, hash, salt, activoVal, userData.id
             );
         } else {
-            db.prepare('UPDATE usuarios SET username = ?, role = ?, permisos = ?, activo = ? WHERE id = ?').run(
+            info = db.prepare('UPDATE usuarios SET username = ?, role = ?, permisos = ?, activo = ? WHERE id = ?').run(
                 userData.username, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, activoVal, userData.id
             );
         }
 
-        // Agregar a Sync Queue
-        const syncData = { ...userData };
-        if (newPassword && newPassword.trim() !== '') syncData.password = newPassword;
-        
-        db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
-            'usuario', userData.id, 'UPDATE', JSON.stringify(syncData)
-        );
-
-        return { success: true };
+        if (info.changes > 0) {
+            // Agregar a Sync Queue
+            const syncData = { ...userData };
+            if (newPassword && newPassword.trim() !== '') syncData.password = newPassword;
+            
+            db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
+                'usuario', userData.id, 'UPDATE', JSON.stringify(syncData)
+            );
+            return { success: true };
+        } else {
+            return { success: false, error: 'Usuario no encontrado' };
+        }
     } catch (err) {
         return { success: false, error: err.message };
     }
@@ -311,14 +321,17 @@ function eliminarUsuario(id) {
             return { success: false, error: 'No puedes eliminar al último administrador.' };
         }
         
-        db.prepare('DELETE FROM usuarios WHERE id = ?').run(id);
+        const info = db.prepare('DELETE FROM usuarios WHERE id = ?').run(id);
 
-        // Agregar a Sync Queue
-        db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
-            'usuario', id, 'DELETE', JSON.stringify({ id })
-        );
-
-        return { success: true };
+        if (info.changes > 0) {
+            // Agregar a Sync Queue
+            db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
+                'usuario', id, 'DELETE', JSON.stringify({ id })
+            );
+            return { success: true };
+        } else {
+            return { success: false, error: 'Usuario no encontrado' };
+        }
     } catch (err) {
         return { success: false, error: err.message };
     }
@@ -555,7 +568,7 @@ function actualizarBanner(banner) {
             SET title = ?, subtitle = ?, imageUrl = ?, imagenLocal = ?, badgeText = ?, ctaText = ?, ctaActionCategory = ?, active = ?, priority = ?
             WHERE id = ?
         `);
-        stmt.run(
+        const info = stmt.run(
             banner.title || '',
             banner.subtitle || null,
             banner.imageUrl || 'PENDIENTE',
@@ -568,23 +581,27 @@ function actualizarBanner(banner) {
             banner.id
         );
         
-        const data = {
-            id: banner.id,
-            title: banner.title || '',
-            subtitle: banner.subtitle || null,
-            imageUrl: banner.imageUrl || 'PENDIENTE',
-            imagenLocal: banner.imagenLocal || null,
-            badgeText: banner.badgeText || null,
-            ctaText: banner.ctaText || 'Ver más',
-            ctaActionCategory: banner.ctaActionCategory || null,
-            active: banner.active ? 1 : 0,
-            priority: banner.priority || 0
-        };
-        
-        db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
-            'banner', banner.id, 'UPDATE', JSON.stringify(data)
-        );
-        return { success: true };
+        if (info.changes > 0) {
+            const data = {
+                id: banner.id,
+                title: banner.title || '',
+                subtitle: banner.subtitle || null,
+                imageUrl: banner.imageUrl || 'PENDIENTE',
+                imagenLocal: banner.imagenLocal || null,
+                badgeText: banner.badgeText || null,
+                ctaText: banner.ctaText || 'Ver más',
+                ctaActionCategory: banner.ctaActionCategory || null,
+                active: banner.active ? 1 : 0,
+                priority: banner.priority || 0
+            };
+            
+            db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
+                'banner', banner.id, 'UPDATE', JSON.stringify(data)
+            );
+            return { success: true };
+        } else {
+            return { success: false, error: 'Banner no encontrado' };
+        }
     } catch (err) {
         return { success: false, error: err.message };
     }
@@ -592,11 +609,15 @@ function actualizarBanner(banner) {
 
 function eliminarBanner(id) {
     try {
-        db.prepare('DELETE FROM banners WHERE id = ?').run(id);
-        db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
-            'banner', id, 'DELETE', JSON.stringify({ id })
-        );
-        return { success: true };
+        const info = db.prepare('DELETE FROM banners WHERE id = ?').run(id);
+        if (info.changes > 0) {
+            db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
+                'banner', id, 'DELETE', JSON.stringify({ id })
+            );
+            return { success: true };
+        } else {
+            return { success: false, error: 'Banner no encontrado' };
+        }
     } catch (err) {
         return { success: false, error: err.message };
     }
@@ -661,16 +682,19 @@ function obtenerListasCompras() {
 
 function eliminarListaCompra(id) {
     try {
+        let changed = false;
         const tx = db.transaction(() => {
             db.prepare('DELETE FROM compras_listas_detalle WHERE lista_id = ?').run(id);
-            db.prepare('DELETE FROM compras_listas WHERE id = ?').run(id);
-            
-            db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
-                'lista_compra', id, 'DELETE', JSON.stringify({ id })
-            );
+            const info = db.prepare('DELETE FROM compras_listas WHERE id = ?').run(id);
+            if (info.changes > 0) {
+                db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
+                    'lista_compra', id, 'DELETE', JSON.stringify({ id })
+                );
+                changed = true;
+            }
         });
         tx();
-        return { success: true };
+        return changed ? { success: true } : { success: false, error: 'Lista no encontrada' };
     } catch (err) {
         return { success: false, error: err.message };
     }

@@ -1,29 +1,57 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Colecciones públicas (Accesibles para los clientes de la web)
-    match /productos/{document} {
-      allow read: if true;
-      allow write: if request.auth != null;
-    }
-    match /banners/{document} {
-      allow read: if true;
-      allow write: if request.auth != null;
-    }
-    match /web_config/{document} {
-      allow read: if true;
-      allow write: if request.auth != null;
-    }
     
-    // Colecciones privadas (Solo personal autenticado)
-    match /usuarios/{document} {
-      allow read, write: if request.auth != null;
+    // Regla global: El usuario debe estar autenticado
+    function isAuthenticated() {
+      return request.auth != null;
     }
-    match /ventas_locales/{document} {
-      allow read, write: if request.auth != null;
+
+    // Regla de Admin (Si tuvieras custom claims, aquí irían. Por ahora asumimos que solo los empleados tienen cuenta en Firebase Auth)
+    // function isAdmin() {
+    //   return isAuthenticated() && request.auth.token.admin == true;
+    // }
+
+    // COBERTURA POR COLECCIÓN (Deniega por defecto, acepta bajo condición)
+
+    // PRODUCTOS:
+    // - Empleados logueados pueden leer, crear y editar. (El POS local valida sus permisos propios antes de enviar, pero aquí al menos exigimos login)
+    // - Si integras la tienda web abierta al público (E-commerce), necesitarás cambiar read: if true;
+    match /productos/{document=**} {
+      allow read: if true; // Permitimos lectura pública para que el Dashboard Web o los clientes puedan ver los productos
+      allow write: if isAuthenticated(); // Solo empleados pueden alterar el inventario
     }
-    match /ventas_locales/{ventaId}/detalle/{document} {
-      allow read, write: if request.auth != null;
+
+    // VENTAS:
+    // - Información hipercrítica. NADIE puede leer o escribir excepto los empleados logueados.
+    match /ventas/{document=**} {
+      allow read, write: if isAuthenticated();
     }
+
+    // ANALYTICS (Público):
+    // - Las visitas a la web se registran de forma anónima, así que cualquiera puede crear un registro de analytics
+    // - Pero solo los empleados pueden leerlas (para el Dashboard)
+    match /analytics/{document=**} {
+      allow create: if true;
+      allow read, update, delete: if isAuthenticated();
+    }
+
+    // USUARIOS (Roles):
+    // - Nadie debería poder leer la lista entera de empleados excepto ellos mismos.
+    match /usuarios/{document=**} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // LISTAS DE COMPRA Y BANNERS:
+    // - Banners deben ser públicos para la tienda web
+    match /banners/{document=**} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    match /lista_compra/{document=**} {
+      allow read, write: if isAuthenticated();
+    }
+
   }
 }

@@ -1,71 +1,99 @@
 import { useState, useEffect } from 'react';
-import { BarChart3, Users as UsersIcon, MessageCircle, ShoppingBag, DollarSign, TrendingUp, RefreshCw, ShoppingCart, Globe, CreditCard } from 'lucide-react';
+import { BarChart3, Users as UsersIcon, MessageCircle, ShoppingBag, DollarSign, TrendingUp, RefreshCw, ShoppingCart, Globe, CreditCard, AlertTriangle, CloudOff, Activity } from 'lucide-react';
+import { getDb } from '../../utils/firebaseClient';
+import { collection, query, where, getDocs, orderBy, limit, Timestamp } from 'firebase/firestore';
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'pos' | 'web'>('pos');
   const [loading, setLoading] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
   
-  // POS Data
+  // Data
   const [ventas, setVentas] = useState<any[]>([]);
+  const [ventasRecientes, setVentasRecientes] = useState<any[]>([]);
+  const [productosBajoStock, setProductosBajoStock] = useState<any[]>([]);
   const [analyticsData, setAnalyticsData] = useState<any[]>([]);
   const [dateFilter, setDateFilter] = useState<'today' | 'week' | 'month'>('today');
 
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   const cargarDatos = async () => {
+    if (!isOnline) return;
     setLoading(true);
     try {
-      // 1. Cargar Datos Web
-      try {
-        const analyticsRes = await (window as any).electron.obtenerAnalytics();
-        if (analyticsRes && analyticsRes.success) {
-          setAnalyticsData(analyticsRes.events || []);
-        }
-      } catch (err) {
-        console.warn('Analytics no disponibles aún:', err);
-      }
-
-      // 2. Cargar Datos POS
-      // Determinar fechas según filtro
+      const db = await getDb();
+      
+      // Fechas
       const hoy = new Date();
       let fechaInicio = new Date();
-      
-      if (dateFilter === 'week') {
-        fechaInicio.setDate(hoy.getDate() - 7);
-      } else if (dateFilter === 'month') {
-        fechaInicio.setDate(hoy.getDate() - 30);
-      } else {
-        // Today
-        fechaInicio.setHours(0, 0, 0, 0);
-      }
+      if (dateFilter === 'week') fechaInicio.setDate(hoy.getDate() - 7);
+      else if (dateFilter === 'month') fechaInicio.setDate(hoy.getDate() - 30);
+      else fechaInicio.setHours(0, 0, 0, 0);
 
-      const inicioStr = fechaInicio.toISOString().split('T')[0];
-      // Para fin, usamos hasta el final de hoy
-      const hoyParaFin = new Date();
-      hoyParaFin.setDate(hoyParaFin.getDate() + 1); // Para incluir todo hoy
-      const finStr = hoyParaFin.toISOString().split('T')[0];
+      const tsInicio = Timestamp.fromDate(fechaInicio);
 
-      try {
-        const ventasRes = await (window as any).electron.obtenerVentas({
-          fechaInicio: inicioStr,
-          fechaFin: finStr
-        });
-        if (ventasRes && ventasRes.success) {
-          setVentas(ventasRes.ventas || []);
-        }
-      } catch (err) {
-        console.warn('Ventas no disponibles:', err);
-      }
+      // 1. Cargar Ventas
+      const qVentas = query(
+        collection(db, 'ventas'),
+        where('fecha', '>=', tsInicio),
+        orderBy('fecha', 'desc')
+      );
+      const snapVentas = await getDocs(qVentas);
+      const ventasList = snapVentas.docs.map(d => ({ id: d.id, ...d.data() }));
+      setVentas(ventasList);
+      setVentasRecientes(ventasList.slice(0, 5)); // Ultimas 5 transacciones
+
+      // 2. Cargar Stock Bajo
+      const qStock = query(
+        collection(db, 'productos'),
+        where('stock', '<=', 10),
+        orderBy('stock', 'asc'),
+        limit(10)
+      );
+      const snapStock = await getDocs(qStock);
+      setProductosBajoStock(snapStock.docs.map(d => ({ id: d.id, ...d.data() })));
+
+      // 3. Cargar Analytics
+      const qAnalytics = query(
+        collection(db, 'analytics'),
+        where('timestamp', '>=', tsInicio),
+        orderBy('timestamp', 'desc')
+      );
+      const snapAnalytics = await getDocs(qAnalytics);
+      setAnalyticsData(snapAnalytics.docs.map(d => ({ id: d.id, ...d.data() })));
 
     } catch (err) {
-      console.error('Error cargando dashboard:', err);
+      console.error('Error cargando dashboard desde Firebase:', err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    cargarDatos();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateFilter]);
+    if (isOnline) {
+      cargarDatos();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateFilter, isOnline]);
+
+  if (!isOnline) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center bg-slate-950 text-slate-400">
+        <CloudOff size={64} className="mb-4 text-slate-600" />
+        <h2 className="text-2xl font-bold text-white mb-2">Dashboard Offline</h2>
+        <p>El panel de control requiere conexión a Internet para leer datos de la nube.</p>
+      </div>
+    );
+  }
 
   // Cálculos POS
   const totalVentas = ventas.reduce((sum, v) => sum + (v.total || 0), 0);
@@ -93,55 +121,62 @@ export default function Dashboard() {
 
   return (
     <div className="h-full flex flex-col bg-slate-950 text-slate-200 overflow-hidden">
-      <div className="p-6 bg-slate-900 border-b border-slate-800 flex justify-between items-center">
+      <div className="p-6 bg-slate-900 border-b border-slate-800 flex justify-between items-center z-10">
         <h1 className="text-2xl font-bold flex items-center gap-3">
-          <BarChart3 className="text-blue-500" /> Dashboard Analytics
+          <BarChart3 className="text-blue-500" /> Cloud Dashboard
+          <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full border border-blue-500/30 flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></span> En Vivo
+          </span>
         </h1>
         <button 
           onClick={cargarDatos}
           disabled={loading}
           className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 px-4 py-2 rounded-lg transition-colors flex items-center gap-2 font-medium"
         >
-          <RefreshCw size={18} className={loading ? 'animate-spin' : ''} /> Actualizar
+          <RefreshCw size={18} className={loading ? 'animate-spin' : ''} /> Actualizar Nube
         </button>
       </div>
 
-      <div className="flex flex-col flex-1 overflow-hidden p-6 gap-6">
+      <div className="flex flex-col flex-1 overflow-hidden p-6 gap-6 relative">
         {/* Pestañas (Tabs) */}
-        <div className="flex bg-slate-900 rounded-lg p-1 w-fit border border-slate-800 shadow-sm">
-          <button
-            onClick={() => setActiveTab('pos')}
-            className={`px-6 py-2.5 text-sm font-semibold rounded-md transition-all flex items-center gap-2 ${
-              activeTab === 'pos' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <ShoppingCart size={16} /> Tienda Física (POS)
-          </button>
-          <button
-            onClick={() => setActiveTab('web')}
-            className={`px-6 py-2.5 text-sm font-semibold rounded-md transition-all flex items-center gap-2 ${
-              activeTab === 'web' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Globe size={16} /> Tienda Web
-          </button>
+        <div className="flex justify-between items-center">
+          <div className="flex bg-slate-900 rounded-lg p-1 w-fit border border-slate-800 shadow-sm">
+            <button
+              onClick={() => setActiveTab('pos')}
+              className={`px-6 py-2.5 text-sm font-semibold rounded-md transition-all flex items-center gap-2 ${
+                activeTab === 'pos' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <ShoppingCart size={16} /> Tienda Física (POS)
+            </button>
+            <button
+              onClick={() => setActiveTab('web')}
+              className={`px-6 py-2.5 text-sm font-semibold rounded-md transition-all flex items-center gap-2 ${
+                activeTab === 'web' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <Globe size={16} /> Tienda Web
+            </button>
+          </div>
+          
+          <div className="flex bg-slate-800 rounded-lg p-1">
+            <button onClick={() => setDateFilter('today')} className={`px-4 py-2 text-xs font-medium rounded transition-colors ${dateFilter === 'today' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}`}>Hoy</button>
+            <button onClick={() => setDateFilter('week')} className={`px-4 py-2 text-xs font-medium rounded transition-colors ${dateFilter === 'week' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}`}>Últimos 7 días</button>
+            <button onClick={() => setDateFilter('month')} className={`px-4 py-2 text-xs font-medium rounded transition-colors ${dateFilter === 'month' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-white'}`}>Últimos 30 días</button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto custom-scrollbar">
-          {activeTab === 'pos' && (
+          {loading ? (
+             <div className="flex items-center justify-center h-64">
+               <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+             </div>
+          ) : activeTab === 'pos' && (
             <div className="space-y-6 animate-in fade-in duration-300">
               
-              <div className="flex justify-between items-center">
-                <h2 className="text-lg font-semibold text-slate-300">Métricas de Ventas POS</h2>
-                <div className="flex bg-slate-800 rounded-lg p-1">
-                  <button onClick={() => setDateFilter('today')} className={`px-3 py-1.5 text-xs font-medium rounded ${dateFilter === 'today' ? 'bg-slate-700 text-white' : 'text-slate-400'}`}>Hoy</button>
-                  <button onClick={() => setDateFilter('week')} className={`px-3 py-1.5 text-xs font-medium rounded ${dateFilter === 'week' ? 'bg-slate-700 text-white' : 'text-slate-400'}`}>Últimos 7 días</button>
-                  <button onClick={() => setDateFilter('month')} className={`px-3 py-1.5 text-xs font-medium rounded ${dateFilter === 'month' ? 'bg-slate-700 text-white' : 'text-slate-400'}`}>Últimos 30 días</button>
-                </div>
-              </div>
-
+              {/* KPIs */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col justify-center shadow-lg shadow-blue-500/5">
+                <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col justify-center shadow-lg hover:border-blue-500/30 transition-colors">
                   <div className="flex items-center gap-4 mb-4">
                     <div className="w-12 h-12 bg-blue-500/10 rounded-xl flex items-center justify-center text-blue-400">
                       <DollarSign size={24} />
@@ -151,7 +186,7 @@ export default function Dashboard() {
                   <span className="text-3xl font-black text-white">S/ {totalVentas.toFixed(2)}</span>
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col justify-center shadow-lg shadow-purple-500/5">
+                <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col justify-center shadow-lg hover:border-purple-500/30 transition-colors">
                   <div className="flex items-center gap-4 mb-4">
                     <div className="w-12 h-12 bg-purple-500/10 rounded-xl flex items-center justify-center text-purple-400">
                       <CreditCard size={24} />
@@ -161,7 +196,7 @@ export default function Dashboard() {
                   <span className="text-3xl font-black text-white">{totalTransacciones}</span>
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col justify-center shadow-lg shadow-emerald-500/5">
+                <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col justify-center shadow-lg hover:border-emerald-500/30 transition-colors">
                   <div className="flex items-center gap-4 mb-4">
                     <div className="w-12 h-12 bg-emerald-500/10 rounded-xl flex items-center justify-center text-emerald-400">
                       <TrendingUp size={24} />
@@ -172,48 +207,96 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-                <h3 className="font-semibold text-slate-300 mb-6 flex items-center gap-2">
-                  <ShoppingBag size={18} className="text-orange-400" /> Productos Más Vendidos
-                </h3>
-                {topProductos.length === 0 ? (
-                  <p className="text-sm text-slate-500 py-4 text-center">No hay datos suficientes para el rango seleccionado.</p>
-                ) : (
-                  <div className="space-y-4">
-                    {topProductos.map((prod, i) => (
-                      <div key={i} className="flex justify-between items-center bg-slate-950/50 p-4 rounded-xl border border-slate-800/50">
-                        <div className="flex items-center gap-4">
-                          <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 font-bold text-xs">
-                            #{i + 1}
-                          </div>
-                          <span className="font-medium text-slate-200">{prod.nombre}</span>
+              {/* Lower Section Grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                
+                {/* Transacciones Recientes (NEW) */}
+                <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col">
+                  <h3 className="font-semibold text-slate-300 mb-6 flex items-center gap-2">
+                    <Activity size={18} className="text-indigo-400" /> Flujo de Caja (Últimas Ventas)
+                  </h3>
+                  {ventasRecientes.length === 0 ? (
+                    <p className="text-sm text-slate-500 py-4 text-center my-auto">No hay ventas recientes.</p>
+                  ) : (
+                    <div className="space-y-3 flex-1">
+                      {ventasRecientes.map((v) => (
+                        <div key={v.id} className="flex justify-between items-center bg-slate-950/50 p-4 rounded-xl border border-slate-800/50 hover:bg-slate-800/50 transition-colors">
+                           <div className="flex flex-col">
+                             <span className="font-bold text-slate-200">{v.id}</span>
+                             <span className="text-xs text-slate-500">{v.clienteNombre || 'Cliente Público'} • {v.metodoPago}</span>
+                           </div>
+                           <div className="text-right">
+                             <span className="font-black text-emerald-400">S/ {Number(v.total).toFixed(2)}</span>
+                             <div className="text-xs text-slate-500">
+                               {new Date(v.fecha?.seconds * 1000 || Date.now()).toLocaleTimeString()}
+                             </div>
+                           </div>
                         </div>
-                        <div className="flex items-center gap-8 text-right">
-                          <div>
-                            <div className="text-xs text-slate-500">Cantidad</div>
-                            <div className="font-bold text-slate-300">{prod.cantidad} und</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Right Column */}
+                <div className="space-y-6 flex flex-col">
+                  
+                  {/* Alertas de Stock Bajo (NEW) */}
+                  <div className="bg-slate-900 border border-red-500/20 rounded-2xl p-6 flex-1 shadow-lg shadow-red-500/5">
+                    <h3 className="font-semibold text-red-400 mb-4 flex items-center gap-2">
+                      <AlertTriangle size={18} /> Alertas de Stock Bajo
+                    </h3>
+                    {productosBajoStock.length === 0 ? (
+                       <p className="text-sm text-emerald-500/70 py-4 text-center">¡Inventario saludable!</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {productosBajoStock.map((prod) => (
+                          <div key={prod.id} className="flex justify-between items-center bg-red-500/5 p-3 rounded-xl border border-red-500/10">
+                            <span className="text-sm font-medium text-slate-300 truncate pr-2">{prod.nombre}</span>
+                            <span className="text-xs font-bold px-2 py-1 bg-red-500/20 text-red-400 rounded-lg whitespace-nowrap">
+                              {prod.stock} und
+                            </span>
                           </div>
-                          <div className="w-24">
-                            <div className="text-xs text-slate-500">Subtotal</div>
-                            <div className="font-bold text-emerald-400">S/ {prod.total.toFixed(2)}</div>
-                          </div>
-                        </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
                   </div>
-                )}
+
+                  {/* Top Productos */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex-1">
+                    <h3 className="font-semibold text-slate-300 mb-4 flex items-center gap-2">
+                      <ShoppingBag size={18} className="text-orange-400" /> Top Ventas
+                    </h3>
+                    {topProductos.length === 0 ? (
+                      <p className="text-sm text-slate-500 py-4 text-center">Sin datos</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {topProductos.slice(0,4).map((prod, i) => (
+                          <div key={i} className="flex justify-between items-center">
+                            <div className="flex items-center gap-3 overflow-hidden">
+                              <div className="text-xs font-bold text-slate-500 w-4">{i + 1}.</div>
+                              <span className="text-sm text-slate-300 truncate">{prod.nombre}</span>
+                            </div>
+                            <span className="text-xs font-bold text-slate-400">{prod.cantidad}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+
               </div>
             </div>
           )}
 
-          {activeTab === 'web' && (
+          {!loading && activeTab === 'web' && (
             <div className="space-y-6 animate-in fade-in duration-300">
                <div className="flex justify-between items-center">
                 <h2 className="text-lg font-semibold text-slate-300">Rendimiento Tienda Web</h2>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col justify-center shadow-lg">
+                <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col justify-center shadow-lg hover:border-blue-500/30 transition-colors">
                   <div className="flex items-center gap-4 mb-4">
                     <div className="w-12 h-12 bg-blue-500/10 rounded-xl flex items-center justify-center text-blue-400">
                       <UsersIcon size={24} />
@@ -225,7 +308,7 @@ export default function Dashboard() {
                   </span>
                 </div>
 
-                <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col justify-center shadow-lg">
+                <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col justify-center shadow-lg hover:border-green-500/30 transition-colors">
                   <div className="flex items-center gap-4 mb-4">
                     <div className="w-12 h-12 bg-green-500/10 rounded-xl flex items-center justify-center text-green-400">
                       <MessageCircle size={24} />
@@ -239,13 +322,13 @@ export default function Dashboard() {
               </div>
 
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-                <h3 className="text-sm font-semibold text-slate-300 mb-4 border-b border-slate-700 pb-2">Actividad Web Reciente</h3>
+                <h3 className="text-sm font-semibold text-slate-300 mb-4 border-b border-slate-700 pb-2">Actividad Web Reciente (Cloud)</h3>
                 {analyticsData.length === 0 ? (
                   <p className="text-xs text-slate-500 text-center py-8">No hay datos registrados aún.</p>
                 ) : (
                   <div className="space-y-3 max-h-80 overflow-y-auto custom-scrollbar pr-2">
                     {analyticsData.slice(0, 50).map(event => (
-                      <div key={event.id} className="flex justify-between items-center p-3 bg-slate-950 rounded-xl border border-slate-800">
+                      <div key={event.id} className="flex justify-between items-center p-3 bg-slate-950 rounded-xl border border-slate-800 hover:bg-slate-800/50 transition-colors">
                         <div className="flex items-center gap-3">
                           {event.type === 'whatsapp_click' ? (
                             <div className="w-8 h-8 rounded-lg bg-green-500/10 flex items-center justify-center"><MessageCircle size={14} className="text-green-400" /></div>
@@ -256,7 +339,7 @@ export default function Dashboard() {
                             {event.type === 'whatsapp_click' ? 'Consulta WhatsApp' : 'Visita a la página principal'}
                           </span>
                         </div>
-                        <span className="text-xs text-slate-500 bg-slate-900 px-2 py-1 rounded">
+                        <span className="text-xs text-slate-500 bg-slate-900 px-2 py-1 rounded border border-slate-800">
                           {event.timestamp ? new Date(event.timestamp.seconds ? event.timestamp.seconds * 1000 : event.timestamp).toLocaleString() : 'Reciente'}
                         </span>
                       </div>

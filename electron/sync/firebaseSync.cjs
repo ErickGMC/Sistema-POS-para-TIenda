@@ -64,8 +64,40 @@ function initFirebase() {
         // Secondary app for auth operations to avoid signing out the main app
         secondaryApp = initializeApp(firebaseConfig, 'SecondaryAuthApp');
         secondaryAuth = getAuth(secondaryApp);
+
+        // Auto-login del Sync Worker para evitar PERMISSION_DENIED
+        autoLoginSyncWorker();
     } catch(e) {
         console.error("Firebase init error:", e);
+    }
+}
+
+async function autoLoginSyncWorker() {
+    try {
+        // Generamos un email dinámico y único basado en el ID del proyecto Firebase del cliente
+        const syncEmail = `sync_worker@${firebaseConfig.projectId}.firebaseapp.com`;
+        
+        // Si no hay password guardado en config, generamos uno y lo guardamos
+        if (!firebaseConfig.syncPassword) {
+            const crypto = require('crypto');
+            firebaseConfig.syncPassword = crypto.randomBytes(16).toString('hex');
+            saveFirebaseConfig(firebaseConfig); // Se guarda en firebase_config.json
+        }
+
+        try {
+            await signInWithEmailAndPassword(auth, syncEmail, firebaseConfig.syncPassword);
+            console.log("Sync Worker autenticado correctamente.");
+        } catch (err) {
+            // Si el usuario no existe, lo creamos
+            if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/invalid-login-credentials') {
+                await createUserWithEmailAndPassword(auth, syncEmail, firebaseConfig.syncPassword);
+                console.log("Sync Worker account creado y autenticado.");
+            } else {
+                throw err;
+            }
+        }
+    } catch (e) {
+        console.error("Error en autoLoginSyncWorker:", e);
     }
 }
 
@@ -386,6 +418,68 @@ async function descargarDatosDesdeNube() {
         });
         
         tx();
+
+        // 4. Descargar Ventas y sus detalles (Paso secuencial para evitar sobrecargar memoria)
+        try {
+            console.log("Descargando historial de ventas desde la nube...");
+            const ventasSnap = await getDocs(collection(firestore, 'ventas_locales'));
+            
+            // Usamos una transacción para insertar todas las ventas de forma atómica
+            const insertVenta = db.prepare('INSERT OR REPLACE INTO ventas (id, fecha, total, metodoPago, estado, clienteNombre, clienteDocumento) VALUES (?, ?, ?, ?, ?, ?, ?)');
+            const insertDetalle = db.prepare('INSERT OR REPLACE INTO ventas_detalle (id, venta_id, producto_id, cantidad, precio_unitario, subtotal) VALUES (?, ?, ?, ?, ?, ?)');
+            
+            for (const docSnap of ventasSnap.docs) {
+                const v = docSnap.data();
+                const ventaId = docSnap.id;
+                
+                // Formatear fecha (Firebase Timestamp a string ISO/SQL DATETIME)
+                let fechaSql = new Date().toISOString();
+                if (v.fecha) {
+                    if (v.fecha.seconds) {
+                        fechaSql = new Date(v.fecha.seconds * 1000).toISOString();
+                    } else if (typeof v.fecha === 'string') {
+                        fechaSql = new Date(v.fecha).toISOString();
+                    }
+                }
+
+                // Guardar Cabecera de Venta
+                insertVenta.run(
+                    ventaId,
+                    fechaSql,
+                    v.total || 0,
+                    v.metodoPago || 'Efectivo',
+                    v.estado || 'completada',
+                    v.clienteNombre || null,
+                    v.clienteDocumento || null
+                );
+
+                // Intentar descargar detalles de esta venta desde su subcolección
+                try {
+                    const detallesSnap = await getDocs(collection(firestore, `ventas_locales/${ventaId}/detalle`));
+                    detallesSnap.forEach(detDoc => {
+                        const detData = detDoc.data();
+                        if (detData && Array.isArray(detData.items)) {
+                            for (const item of detData.items) {
+                                insertDetalle.run(
+                                    item.id,
+                                    ventaId,
+                                    item.producto_id,
+                                    item.cantidad,
+                                    item.precio_unitario,
+                                    item.subtotal
+                                );
+                            }
+                        }
+                    });
+                } catch (errDetalle) {
+                    console.error(`Error descargando detalles para venta ${ventaId}:`, errDetalle);
+                }
+            }
+            console.log(`Descarga de ventas completada. Total procesadas: ${ventasSnap.size}`);
+        } catch (errVentas) {
+            console.error("Error al descargar ventas locales:", errVentas);
+        }
+
         return { success: true };
     } catch (e) {
         console.error('Error descargando datos:', e);

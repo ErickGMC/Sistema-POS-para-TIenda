@@ -74,24 +74,32 @@ function initFirebase() {
 
 async function autoLoginSyncWorker() {
     try {
+        const crypto = require('crypto');
         // Generamos un email dinámico y único basado en el ID del proyecto Firebase del cliente
         const syncEmail = `sync_worker@${firebaseConfig.projectId}.firebaseapp.com`;
         
-        // Si no hay password guardado en config, generamos uno y lo guardamos
-        if (!firebaseConfig.syncPassword) {
-            const crypto = require('crypto');
-            firebaseConfig.syncPassword = crypto.randomBytes(16).toString('hex');
-            saveFirebaseConfig(firebaseConfig); // Se guarda en firebase_config.json
-        }
+        // Generamos una contraseña determinista basada en el apiKey del proyecto
+        // Esto previene fallos si se reinstala la app o se borra la configuración local
+        const syncPassword = crypto.createHash('sha256').update(firebaseConfig.apiKey).digest('hex').slice(0, 20);
 
         try {
-            await signInWithEmailAndPassword(auth, syncEmail, firebaseConfig.syncPassword);
+            await signInWithEmailAndPassword(auth, syncEmail, syncPassword);
             console.log("Sync Worker autenticado correctamente.");
         } catch (err) {
             // Si el usuario no existe, lo creamos
             if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/invalid-login-credentials') {
-                await createUserWithEmailAndPassword(auth, syncEmail, firebaseConfig.syncPassword);
-                console.log("Sync Worker account creado y autenticado.");
+                try {
+                    await createUserWithEmailAndPassword(auth, syncEmail, syncPassword);
+                    console.log("Sync Worker account creado y autenticado.");
+                } catch (createErr) {
+                    // Si el correo ya existía (por ejemplo, contraseña desincronizada en la nube), 
+                    // no detenemos la ejecución, pero informamos del inconveniente
+                    if (createErr.code === 'auth/email-already-in-use') {
+                        console.error("El usuario de sincronización ya existe en Firebase, pero la contraseña no coincide. Por favor, elimínalo de Firebase Auth para que se vuelva a crear.");
+                    } else {
+                        throw createErr;
+                    }
+                }
             } else {
                 throw err;
             }

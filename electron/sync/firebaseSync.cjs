@@ -139,6 +139,17 @@ async function sincronizarCola() {
         return;
     }
 
+    if (!auth || !auth.currentUser) {
+        console.log('Usuario no autenticado en Firebase: Sincronización pausada.');
+        const { BrowserWindow } = require('electron');
+        BrowserWindow.getAllWindows().forEach(win => {
+            if (!win.isDestroyed()) {
+                win.webContents.send('sync:error', 'Sincronización pausada: Falta iniciar sesión en la nube o configurar Auth.');
+            }
+        });
+        return;
+    }
+
     // Obtener registros pendientes (estado_sync = 0)
     const registros = db.prepare('SELECT * FROM sync_queue WHERE estado_sync = 0 ORDER BY fecha_creacion ASC').all();
     

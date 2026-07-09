@@ -71,8 +71,23 @@ app.whenReady().then(() => {
     if (localRes.success) {
       finalRes = localRes;
       try {
-        await loginConFirebase(username, password, true); // Sincroniza auth con Firebase, crea si es admin inicial
-        await tryAutoDownload();
+        const fbRes = await loginConFirebase(username, password, true); // Sincroniza auth con Firebase, crea si es admin inicial
+        
+        if (!fbRes.success) {
+            console.warn("Advertencia de Firebase Auth en background:", fbRes.error);
+            // Avisar al frontend (el login local procede para modo offline)
+            const { BrowserWindow } = require('electron');
+            BrowserWindow.getAllWindows().forEach(win => {
+                let msg = `Aviso de Nube: ${fbRes.error}`;
+                if (fbRes.code === 'auth/operation-not-allowed') {
+                    msg = "Configuración faltante: Debes habilitar 'Correo electrónico/Contraseña' en la sección Authentication de tu consola Firebase para sincronizar.";
+                }
+                win.webContents.send('sync:error', msg);
+            });
+        } else {
+            // Solo auto-descargamos si el login de Firebase fue exitoso
+            await tryAutoDownload();
+        }
       } catch (e) {
         console.error("Error background auth firebase:", e);
       }

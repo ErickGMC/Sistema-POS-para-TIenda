@@ -293,7 +293,9 @@ async function loginConFirebase(email, password, allowCreate = false) {
     try {
         let loginEmail = email;
         if (!loginEmail.includes('@')) {
-            loginEmail = `${loginEmail}@minimarketflor.com`;
+            // Usamos el ID del proyecto Firebase como dominio para que sea universal
+            const domain = firebaseConfig ? firebaseConfig.projectId : 'pos.local';
+            loginEmail = `${loginEmail}@${domain}.com`;
         }
         try {
             const userCredential = await signInWithEmailAndPassword(auth, loginEmail, password);

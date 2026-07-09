@@ -1,4 +1,4 @@
-const { db } = require('../database/db.cjs');
+const { db, crearAdminPorDefecto, limpiarUsuariosLocales } = require('../database/db.cjs');
 const { initializeApp, deleteApp, getApps } = require('firebase/app');
 const { getFirestore, doc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField } = require('firebase/firestore');
 const { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } = require('firebase/auth');
@@ -59,11 +59,10 @@ async function saveFirebaseConfig(config) {
             
             // Detección de estado de base de datos para configuración de Admin Local
             if (prodSnap.empty) {
-                // Base de datos nueva
-                db.crearAdminPorDefecto();
+                crearAdminPorDefecto();
             } else {
                 // Base de datos existente: forzamos el login desde la nube
-                db.limpiarUsuariosLocales();
+                limpiarUsuariosLocales();
             }
             
         } catch (validationErr) {

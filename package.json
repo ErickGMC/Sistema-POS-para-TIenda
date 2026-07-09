@@ -23,6 +23,8 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "!electron/database/pos.db*",
+      "!electron/sync/firebase_config.json",
       "package.json"
     ],
     "win": {

@@ -374,30 +374,60 @@ async function subirImagenStorage(buffer, type, categoria) {
 async function descargarDatosDesdeNube() {
     if (!firestore) return { success: false, error: 'Firebase no está configurado.' };
     try {
-        // Descargar Productos
+        console.log("Descargando base de datos completa desde Firebase...");
+        
+        // 1. Descargar Productos
         const prodSnap = await getDocs(collection(firestore, 'productos'));
         const productos = [];
         prodSnap.forEach(d => productos.push(d.data()));
 
-        // Descargar Usuarios
+        // 2. Descargar Usuarios
         const userSnap = await getDocs(collection(firestore, 'usuarios'));
         const usuarios = [];
         userSnap.forEach(d => usuarios.push(d.data()));
 
-        // Descargar Banners
+        // 3. Descargar Banners
         const bannerSnap = await getDocs(collection(firestore, 'banners'));
         const banners = [];
         bannerSnap.forEach(d => banners.push(d.data()));
 
-        // Guardar en local de forma transaccional (sqlite db)
-        const stmtInsertProd = db.prepare('INSERT OR REPLACE INTO productos (id, codigoBarras, nombre, descripcion, categoria, precio, costo, stock, unidadMedida, imagenUrl, thumbnailUrl, imagenLocal, thumbnailLocal, disponible, destacado, etiquetas) VALUES (@id, @codigoBarras, @nombre, @descripcion, @categoria, @precio, @costo, @stock, @unidadMedida, @imagenUrl, @thumbnailUrl, @imagenLocal, @thumbnailLocal, @disponible, @destacado, @etiquetas)');
+        // 4. Descargar Ventas y Detalles en memoria
+        const ventasList = [];
+        const ventasSnap = await getDocs(collection(firestore, 'ventas_locales'));
         
+        for (const docSnap of ventasSnap.docs) {
+            const v = docSnap.data();
+            const ventaId = docSnap.id;
+            const detalles = [];
+            
+            // Descargar los detalles de cada venta de forma anticipada
+            const detallesSnap = await getDocs(collection(firestore, `ventas_locales/${ventaId}/detalle`));
+            detallesSnap.forEach(detDoc => {
+                const detData = detDoc.data();
+                if (detData && Array.isArray(detData.items)) {
+                    detalles.push(...detData.items);
+                }
+            });
+            
+            ventasList.push({
+                id: ventaId,
+                data: v,
+                detalles
+            });
+        }
+
+        console.log("Descarga de red completada con éxito. Escribiendo de forma atómica en SQLite...");
+
+        // 5. Guardar en SQLite en UNA SOLA TRANSACCIÓN ATÓMICA
+        const stmtInsertProd = db.prepare('INSERT OR REPLACE INTO productos (id, codigoBarras, nombre, descripcion, categoria, precio, costo, stock, unidadMedida, imagenUrl, thumbnailUrl, imagenLocal, thumbnailLocal, disponible, destacado, etiquetas) VALUES (@id, @codigoBarras, @nombre, @descripcion, @categoria, @precio, @costo, @stock, @unidadMedida, @imagenUrl, @thumbnailUrl, @imagenLocal, @thumbnailLocal, @disponible, @destacado, @etiquetas)');
+        const stmtUser = db.prepare('INSERT OR REPLACE INTO usuarios (id, username, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        const stmtBanner = db.prepare('INSERT OR REPLACE INTO banners (id, title, subtitle, imageUrl, imagenLocal, badgeText, ctaText, ctaActionCategory, active, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        const insertVenta = db.prepare('INSERT OR REPLACE INTO ventas (id, fecha, total, metodoPago, estado, clienteNombre, clienteDocumento) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        const insertDetalle = db.prepare('INSERT OR REPLACE INTO ventas_detalle (id, venta_id, producto_id, cantidad, precio_unitario, subtotal) VALUES (?, ?, ?, ?, ?, ?)');
+
         const tx = db.transaction(() => {
-            // Usuarios
-            const stmtUser = db.prepare('INSERT OR REPLACE INTO usuarios (id, username, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?)');
+            // A. Registrar Usuarios
             for (const u of usuarios) {
-                // Generar salt y hash genérico local si no existe (Firebase maneja la auth real, pero SQLite requiere la columna)
-                // Usamos un password default 'sync' ya que login real pasa a firebase
                 const crypto = require('crypto');
                 const salt = crypto.randomBytes(16).toString('hex');
                 const hash = crypto.scryptSync('123456', salt, 64).toString('hex');
@@ -413,7 +443,7 @@ async function descargarDatosDesdeNube() {
                 );
             }
 
-            // Productos
+            // B. Registrar Productos
             for (const p of productos) {
                 stmtInsertProd.run({
                     id: p.id,
@@ -435,31 +465,18 @@ async function descargarDatosDesdeNube() {
                 });
             }
 
-            // Banners
-            const stmtBanner = db.prepare('INSERT OR REPLACE INTO banners (id, title, subtitle, imageUrl, imagenLocal, badgeText, ctaText, ctaActionCategory, active, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+            // C. Registrar Banners
             for (const b of banners) {
                 stmtBanner.run(
                     b.id, b.title || '', b.subtitle || null, b.imageUrl || null, b.imagenLocal || null, b.badgeText || null, b.ctaText || 'Ver más', b.ctaActionCategory || null, b.active ? 1 : 0, b.priority || 0
                 );
             }
-        });
-        
-        tx();
 
-        // 4. Descargar Ventas y sus detalles (Paso secuencial para evitar sobrecargar memoria)
-        try {
-            console.log("Descargando historial de ventas desde la nube...");
-            const ventasSnap = await getDocs(collection(firestore, 'ventas_locales'));
-            
-            // Usamos una transacción para insertar todas las ventas de forma atómica
-            const insertVenta = db.prepare('INSERT OR REPLACE INTO ventas (id, fecha, total, metodoPago, estado, clienteNombre, clienteDocumento) VALUES (?, ?, ?, ?, ?, ?, ?)');
-            const insertDetalle = db.prepare('INSERT OR REPLACE INTO ventas_detalle (id, venta_id, producto_id, cantidad, precio_unitario, subtotal) VALUES (?, ?, ?, ?, ?, ?)');
-            
-            for (const docSnap of ventasSnap.docs) {
-                const v = docSnap.data();
-                const ventaId = docSnap.id;
+            // D. Registrar Ventas y Detalles
+            for (const itemVenta of ventasList) {
+                const v = itemVenta.data;
+                const ventaId = itemVenta.id;
                 
-                // Formatear fecha (Firebase Timestamp a string ISO/SQL DATETIME)
                 let fechaSql = new Date().toISOString();
                 if (v.fecha) {
                     if (v.fecha.seconds) {
@@ -469,7 +486,6 @@ async function descargarDatosDesdeNube() {
                     }
                 }
 
-                // Guardar Cabecera de Venta
                 insertVenta.run(
                     ventaId,
                     fechaSql,
@@ -480,37 +496,25 @@ async function descargarDatosDesdeNube() {
                     v.clienteDocumento || null
                 );
 
-                // Intentar descargar detalles de esta venta desde su subcolección
-                try {
-                    const detallesSnap = await getDocs(collection(firestore, `ventas_locales/${ventaId}/detalle`));
-                    detallesSnap.forEach(detDoc => {
-                        const detData = detDoc.data();
-                        if (detData && Array.isArray(detData.items)) {
-                            for (const item of detData.items) {
-                                insertDetalle.run(
-                                    item.id,
-                                    ventaId,
-                                    item.producto_id,
-                                    item.cantidad,
-                                    item.precio_unitario,
-                                    item.subtotal
-                                );
-                            }
-                        }
-                    });
-                } catch (errDetalle) {
-                    console.error(`Error descargando detalles para venta ${ventaId}:`, errDetalle);
+                for (const d of itemVenta.detalles) {
+                    insertDetalle.run(
+                        d.id,
+                        ventaId,
+                        d.producto_id,
+                        d.cantidad,
+                        d.precio_unitario,
+                        d.subtotal
+                    );
                 }
             }
-            console.log(`Descarga de ventas completada. Total procesadas: ${ventasSnap.size}`);
-        } catch (errVentas) {
-            console.error("Error al descargar ventas locales:", errVentas);
-        }
-
+        });
+        
+        tx();
+        console.log("Base de datos escrita y guardada localmente con éxito.");
         return { success: true };
     } catch (e) {
-        console.error('Error descargando datos:', e);
-        return { success: false, error: e.message };
+        console.error('Error durante la descarga de datos:', e);
+        return { success: false, error: `Error en red o permisos: ${e.message}` };
     }
 }
 

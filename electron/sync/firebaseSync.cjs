@@ -149,6 +149,7 @@ async function sincronizarCola() {
 
     const batch = writeBatch(firestore);
     const registrosProcesados = [];
+    let ultimoError = null;
 
     for (const reg of registros) {
         try {
@@ -256,8 +257,9 @@ async function sincronizarCola() {
 
             registrosProcesados.push(reg.id);
         } catch (e) {
-            console.error('Error parseando JSON de sync:', e);
+            console.error('Error procesando registro de sync:', e);
             db.prepare('UPDATE sync_queue SET intentos = intentos + 1 WHERE id = ?').run(reg.id);
+            ultimoError = e;
         }
     }
 
@@ -296,6 +298,14 @@ async function sincronizarCola() {
                 }
             });
         }
+    } else if (ultimoError) {
+        // Si no se procesó nada pero hubo un error en el bucle, notificar al frontend
+        const { BrowserWindow } = require('electron');
+        BrowserWindow.getAllWindows().forEach(win => {
+            if (!win.isDestroyed()) {
+                win.webContents.send('sync:error', ultimoError.message || 'Error en la cola de sincronización');
+            }
+        });
     }
 }
 

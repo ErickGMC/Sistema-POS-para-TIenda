@@ -64,21 +64,24 @@ try {
     console.error("Error creating correlativos table:", e);
 }
 
-// Crear usuario por defecto si no existen usuarios (permite el primer login antes de descargar la nube)
-try {
-    const count = db.prepare("SELECT COUNT(*) as count FROM usuarios").get().count;
-    if (count === 0) {
-        const adminId = crypto.randomUUID();
-        const salt = crypto.randomBytes(16).toString('hex');
-        const hash = crypto.scryptSync('admin', salt, 64).toString('hex');
-        
-        db.prepare('INSERT INTO usuarios (id, username, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-            adminId, 'admin', hash, salt, 'admin', JSON.stringify(['all']), 1
-        );
-        console.log('Usuario admin por defecto creado.');
+function crearAdminPorDefecto() {
+    try {
+        const count = db.prepare("SELECT COUNT(*) as count FROM usuarios").get().count;
+        if (count === 0) {
+            const adminId = crypto.randomUUID();
+            const salt = crypto.randomBytes(16).toString('hex');
+            const hash = crypto.scryptSync('admin', salt, 64).toString('hex');
+            
+            db.prepare('INSERT INTO usuarios (id, username, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+                adminId, 'admin', hash, salt, 'admin', JSON.stringify(['all']), 1
+            );
+            console.log('Usuario admin por defecto creado a petición (base de datos limpia).');
+            return true;
+        }
+    } catch (e) {
+        console.error("Error al crear usuario por defecto:", e);
     }
-} catch (e) {
-    console.error("Error al crear usuario por defecto:", e);
+    return false;
 }
 // --- Funciones CRUD de Productos ---
 
@@ -709,6 +712,17 @@ function obtenerEstadoSync() {
     }
 }
 
+function limpiarUsuariosLocales() {
+    try {
+        db.prepare('DELETE FROM usuarios').run();
+        console.log('Usuarios locales limpiados.');
+        return true;
+    } catch (e) {
+        console.error("Error al limpiar usuarios locales:", e);
+        return false;
+    }
+}
+
 module.exports = {
     db,
     buscarProductoPorCodigo,
@@ -734,6 +748,8 @@ module.exports = {
     eliminarBanner,
     guardarListaCompra,
     obtenerListasCompras,
-    eliminarListaCompra
+    eliminarListaCompra,
+    crearAdminPorDefecto,
+    limpiarUsuariosLocales
 };
 

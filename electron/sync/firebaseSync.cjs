@@ -49,13 +49,23 @@ async function saveFirebaseConfig(config) {
             const tempFirestore = getFirestore(tempApp);
             
             // Intentamos leer un documento de la colección productos que debe tener 'allow read: if true;'
-            await withTimeout(
+            const prodSnap = await withTimeout(
                 getDocs(query(collection(tempFirestore, 'productos'), limit(1))),
                 7000, // 7 segundos máximo
                 "Tiempo de espera agotado al verificar las credenciales de Firebase."
             );
             
             await deleteApp(tempApp);
+            
+            // Detección de estado de base de datos para configuración de Admin Local
+            if (prodSnap.empty) {
+                // Base de datos nueva
+                db.crearAdminPorDefecto();
+            } else {
+                // Base de datos existente: forzamos el login desde la nube
+                db.limpiarUsuariosLocales();
+            }
+            
         } catch (validationErr) {
             console.error("Fallo la validación de Firebase Config:", validationErr);
             let userMsg = validationErr.message;

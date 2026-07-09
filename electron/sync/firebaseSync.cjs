@@ -119,10 +119,24 @@ async function autoLoginSyncWorker() {
 // Intentar inicializar al arrancar
 loadConfig();
 
+// Helper para envolver promesas con tiempo de espera máximo (Timeout)
+function withTimeout(promise, timeoutMs, errorMessage) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(errorMessage)), timeoutMs))
+    ]);
+}
+
 // Verificar conexión a internet antes de sincronizar
 function isOnline() {
     return new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+            console.log("isOnline: Tiempo de espera agotado al consultar DNS (Offline).");
+            resolve(false);
+        }, 3000); // 3 segundos máximo
+        
         require('dns').lookup('google.com', function(err) {
+            clearTimeout(timeout);
             if (err) {
                resolve(false);
             } else {
@@ -202,7 +216,11 @@ async function sincronizarCola() {
                     }
                     
                     try {
-                        await createUserWithEmailAndPassword(secondaryAuth, email, password || 'admin123');
+                        await withTimeout(
+                            createUserWithEmailAndPassword(secondaryAuth, email, password || 'admin123'),
+                            10000,
+                            "Tiempo de espera agotado al registrar colaborador en Firebase Auth (10s)"
+                        );
                     } catch (authErr) {
                         if (authErr.code !== 'auth/email-already-in-use') {
                             throw authErr;
@@ -265,7 +283,11 @@ async function sincronizarCola() {
 
     if (registrosProcesados.length > 0) {
         try {
-            await batch.commit();
+            await withTimeout(
+                batch.commit(),
+                15000,
+                "Tiempo de espera agotado al enviar datos a Firestore (15s)"
+            );
             // Marcar como completados
             const updateStmt = db.prepare('UPDATE sync_queue SET estado_sync = 1 WHERE id = ?');
             const tx = db.transaction((ids) => {

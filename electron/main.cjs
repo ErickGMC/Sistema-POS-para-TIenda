@@ -91,16 +91,32 @@ app.whenReady().then(() => {
     return localRes; // Si falla la red o las credenciales de Firebase, retornar el error local original
   });
   ipcMain.handle('usuarios:obtener', async () => {
-    return db.obtenerUsuarios();
+    try {
+      return db.obtenerUsuarios();
+    } catch (err) {
+      return [];
+    }
   });
   ipcMain.handle('usuarios:crear', async (_, { userData, password }) => {
-    return db.crearUsuario(userData, password);
+    try {
+      return db.crearUsuario(userData, password);
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
   });
   ipcMain.handle('usuarios:actualizar', async (_, { userData, newPassword }) => {
-    return db.actualizarUsuario(userData, newPassword);
+    try {
+      return db.actualizarUsuario(userData, newPassword);
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
   });
   ipcMain.handle('usuarios:eliminar', async (_, id) => {
-    return db.eliminarUsuario(id);
+    try {
+      return db.eliminarUsuario(id);
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
   });
 
   // Iniciar worker de sincronización en background
@@ -174,35 +190,67 @@ app.on('window-all-closed', () => {
 
 // IPC DB Methods
 ipcMain.handle('db:buscarProductoPorCodigo', (event, codigo) => {
-  return db.buscarProductoPorCodigo(codigo);
+  try {
+    return db.buscarProductoPorCodigo(codigo);
+  } catch (err) {
+    return null;
+  }
 });
 
 ipcMain.handle('db:buscarProductosPorNombre', (event, nombre) => {
-  return db.buscarProductosPorNombre(nombre);
+  try {
+    return db.buscarProductosPorNombre(nombre);
+  } catch (err) {
+    return [];
+  }
 });
 
 ipcMain.handle('db:obtenerTodosProductos', () => {
-  return db.obtenerTodosProductos();
+  try {
+    return db.obtenerTodosProductos();
+  } catch (err) {
+    return [];
+  }
 });
 
 ipcMain.handle('db:crearProducto', (event, producto) => {
-  return db.crearProducto(producto);
+  try {
+    return db.crearProducto(producto);
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 ipcMain.handle('db:actualizarProducto', (event, producto) => {
-  return db.actualizarProducto(producto);
+  try {
+    return db.actualizarProducto(producto);
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 ipcMain.handle('db:eliminarProducto', (event, id) => {
-  return db.eliminarProducto(id);
+  try {
+    return db.eliminarProducto(id);
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 ipcMain.handle('db:guardarVenta', (event, venta, detalle) => {
-  return db.guardarVenta(venta, detalle);
+  try {
+    return db.guardarVenta(venta, detalle);
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 ipcMain.handle('db:obtenerVentas', (event, filtros) => {
-  return db.obtenerVentas(filtros);
+  try {
+    return db.obtenerVentas(filtros);
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 // Image Optimization IPC

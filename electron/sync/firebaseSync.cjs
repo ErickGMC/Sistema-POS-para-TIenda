@@ -60,6 +60,9 @@ async function saveFirebaseConfig(config) {
         
         // Validación de Conexión
         try {
+            const prodSnap = await withTimeout(
+                getDocs(query(collection(firestore, 'productos'), limit(1))),
+                7000,
                 "Tiempo de espera agotado al verificar las credenciales de Firebase."
             );
             

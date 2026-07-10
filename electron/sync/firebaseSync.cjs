@@ -584,7 +584,7 @@ async function descargarDatosDesdeNube() {
 
                 for (const d of itemVenta.detalles) {
                     insertDetalle.run(
-                        d.id || crypto.randomUUID(),
+                        d.id || require('crypto').randomUUID(),
                         ventaId,
                         d.producto_id || '',
                         d.cantidad || 1,

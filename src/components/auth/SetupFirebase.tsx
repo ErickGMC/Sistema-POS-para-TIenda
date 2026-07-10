@@ -19,23 +19,16 @@ export default function SetupFirebase({ onSuccess }: SetupFirebaseProps) {
     
     try {
       // Validate JSON
-      let parsedConfig;
-      try {
-        parsedConfig = JSON.parse(jsonConfig);
-      } catch (err) {
-        throw new Error('El texto ingresado no es un JSON válido. Asegúrate de copiar el objeto completo.');
-      }
-
-      // Check for required fields roughly
-      const requiredKeys = ['apiKey', 'projectId', 'authDomain'];
-      for (const key of requiredKeys) {
-        if (!parsedConfig[key]) {
-          throw new Error(`Falta la propiedad requerida: ${key}. Por favor verifica el formato.`);
+      const parsedConfig = JSON.parse(jsonConfig);
+      
+      const requiredFields = ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'appId'];
+      for (const field of requiredFields) {
+        if (!parsedConfig[field]) {
+          throw new Error(`El JSON está incompleto. Falta el campo: ${field}`);
         }
       }
 
       // Send to Electron
-      setLoadingMsg('Sincronizando información. Por favor, no cierres la aplicación...');
       const result = await (window as any).electron.setFirebaseConfig(parsedConfig);
       if (result.success) {
         onSuccess();

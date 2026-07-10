@@ -55,7 +55,21 @@ app.whenReady().then(() => {
     let finalRes = { success: false, error: 'Credenciales inválidas' };
     let localRes = db.login(username, password);
 
-    const { loginConFirebase } = require('./sync/firebaseSync.cjs');
+    const { loginConFirebase, descargarDatosDesdeNube } = require('./sync/firebaseSync.cjs');
+
+    const tryAutoDownload = async () => {
+      try {
+        const prodCount = db.obtenerTodosProductos().length;
+        if (prodCount === 0) {
+          const { BrowserWindow } = require('electron');
+          BrowserWindow.getAllWindows().forEach(win => {
+              win.webContents.send('sync:status', 'Descargando base de datos, por favor espere...');
+          });
+          console.log("Base de datos local vacía. Auto-descargando desde la nube tras login exitoso...");
+          await descargarDatosDesdeNube();
+        }
+      } catch(e) { console.error("Error en auto-descarga:", e); }
+    };
 
     if (localRes.success) {
       finalRes = localRes;
@@ -73,6 +87,8 @@ app.whenReady().then(() => {
                 }
                 win.webContents.send('sync:error', msg);
             });
+        } else {
+            await tryAutoDownload();
         }
       } catch (e) {
         console.error("Error background auth firebase:", e);
@@ -85,6 +101,7 @@ app.whenReady().then(() => {
           const registrarRes = db.registrarUsuarioDesdeFirebase(fbRes.uid, username, password, 'admin');
           if (registrarRes.success) {
             finalRes = db.login(username, password);
+            await tryAutoDownload();
           }
         } else {
           if (fbRes.code === 'auth/wrong-password' || fbRes.code === 'auth/invalid-credential' || fbRes.code === 'auth/invalid-login-credentials') {

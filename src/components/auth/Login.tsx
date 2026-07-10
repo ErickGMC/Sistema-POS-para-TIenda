@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '../../store/useAuthStore';
 import { Store, Lock, User, LogIn } from 'lucide-react';
 
@@ -6,14 +6,30 @@ export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loadingMsg, setLoadingMsg] = useState('');
   const login = useAuthStore(state => state.login);
+
+  useEffect(() => {
+    const handleSyncStatus = (_: any, msg: string) => {
+      setLoadingMsg(msg);
+    };
+    
+    // Asumimos que electron.ipcRenderer.on está expuesto o usamos una función similar
+    if ((window as any).electron.onSyncStatus) {
+      (window as any).electron.onSyncStatus(handleSyncStatus);
+    } else {
+       // fallback manual
+       try {
+           require('electron').ipcRenderer.on('sync:status', handleSyncStatus);
+       } catch (e) {}
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username || !password) return;
     
-    setLoading(true);
+    setLoadingMsg('Verificando credenciales...');
     setError('');
     
     try {
@@ -27,7 +43,7 @@ export default function Login() {
       console.error(err);
       setError('Error interno del sistema');
     } finally {
-      setLoading(false);
+      setLoadingMsg('');
     }
   };
 
@@ -91,11 +107,11 @@ export default function Login() {
 
             <button
               type="submit"
-              disabled={loading}
-              className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-lg rounded-xl py-3.5 mt-4 transition-all duration-300 shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 group disabled:opacity-70"
+              disabled={!!loadingMsg}
+              className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-lg rounded-xl py-3.5 mt-4 transition-all duration-300 shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 group disabled:opacity-70 disabled:cursor-wait"
             >
-              <LogIn size={20} className="group-hover:translate-x-1 transition-transform" />
-              {loading ? 'Verificando...' : 'Acceder al Sistema'}
+              <LogIn size={20} className={loadingMsg ? "animate-pulse" : "group-hover:translate-x-1 transition-transform"} />
+              {loadingMsg ? loadingMsg : 'Acceder al Sistema'}
             </button>
           </form>
           

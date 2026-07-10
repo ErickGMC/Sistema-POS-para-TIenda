@@ -18,64 +18,127 @@ Para que **ambos sistemas se comuniquen**, DEBEN estar conectados exactamente al
 
 ## 🚀 Requisitos Previos
 
-Si deseas clonar y usar este ecosistema para tu propio negocio, necesitarás:
-1. **Node.js** (v18 o superior).
-2. Una cuenta en [Firebase Console](https://console.firebase.google.com/).
-3. Crear un proyecto nuevo en Firebase y **actualizar el proyecto al Plan Blaze (Pago por uso)**. *Nota: Este plan es un requisito de Firebase cuando se utilizan subcolecciones y descargas masivas o almacenamiento intensivo, aunque la cuota gratuita mensual es extremadamente generosa.*
-4. Habilitar **Firestore Database** y **Firebase Storage** en tu proyecto.
-5. Habilitar **Firebase Authentication** (Proveedor de Email/Contraseña).
+1. **Node.js**: Debes tener Node.js instalado (v16 o superior).
+2. **Git**: Para clonar el repositorio.
+3. **Cuenta de Firebase (Plan Blaze)**: Es de suma importancia. Firestore requiere el **Plan Blaze (Pago por uso)**. Aunque ofrece una cuota gratuita inmensa que rara vez superarás en un minimarket estándar, el plan Blaze es un requisito técnico obligatorio para usar todas las APIs necesarias.
 
 ---
 
-## ⚙️ Configuración Paso a Paso
+## 🔥 Configuración Obligatoria de Firebase
 
-### 1. Preparar Firebase
-En tu consola de Firebase, registra una "Aplicación Web" (</>). Firebase te proporcionará un bloque de código con tus credenciales de configuración. Mantenlo a la mano.
+Antes de poder iniciar el POS por primera vez, **DEBES** configurar correctamente tu proyecto en Firebase Console. Sigue estos pasos al pie de la letra para evitar errores de conexión ("permission-denied"):
 
-### 2. Instalar el Sistema POS
-Clona este repositorio e instala las dependencias:
-```bash
-git clone https://github.com/ErickGMC/Sistema-POS-para-TIenda.git
-cd Sistema-POS-para-TIenda
-npm install
-```
+### Paso 1: Crear el Proyecto
+1. Ve a [Firebase Console](https://console.firebase.google.com/) y crea un proyecto nuevo.
+2. Actualiza el proyecto al **Plan Blaze** en la esquina inferior izquierda (Facturación).
+3. Agrega una **Aplicación Web** a tu proyecto para obtener el objeto de Configuración (el JSON con tu `apiKey`, `projectId`, etc.). Guarda ese código, lo necesitarás al abrir el POS.
 
-### 3. Ejecutar y Vincular a la Nube
-Inicia la aplicación en modo desarrollo:
-```bash
-npm run dev
-```
+### Paso 2: Habilitar Authentication y Crear tu Administrador
+1. En el menú izquierdo de Firebase, ve a **Authentication** y habilítalo.
+2. Ve a la pestaña **Sign-in method** y activa el proveedor de **Correo electrónico/Contraseña**.
+3. Ve a la pestaña **Users (Usuarios)** y presiona "Agregar Usuario".
+4. Crea tu usuario de acceso (ejemplo: `admin@minimarket.com` con contraseña `admin123`). **Este es el correo que usarás para loguearte en el POS.**
+5. Copia el **UID (User ID)** que Firebase le asignó a este usuario.
 
-Al abrir por primera vez, **la pantalla inicial te pedirá las credenciales de tu Firebase**. Debes pegar **únicamente el objeto JSON** (las llaves) que Firebase te entregó en el paso 1. 
+### Paso 3: Habilitar Firestore Database
+1. En el menú izquierdo, ve a **Firestore Database** y haz clic en "Crear base de datos".
+2. Empieza en "Modo de prueba" y elige la región más cercana a ti.
+3. Ahora **DEBES** crear manualmente a tu usuario en la base de datos para que el sistema lo reconozca:
+   - Haz clic en "Iniciar colección".
+   - ID de la colección: `usuarios`
+   - **ID del documento: Pega el UID que copiaste en el Paso 2.**
+   - Agrega los siguientes campos al documento:
+     - `username` (string): `tu-correo` (ej. admin@minimarket.com)
+     - `role` (string): `admin`
+     - `permisos` (string): `["all"]`
+     - `activo` (boolean): `true`
 
-**Ejemplo de formato que debes pegar:**
-```json
-{
-  "apiKey": "AIzaSyD0GPWoxJAxMvK6u8ZE1F24CXxJRYvdoxo",
-  "authDomain": "mi-tienda.firebaseapp.com",
-  "projectId": "mi-tienda",
-  "storageBucket": "mi-tienda.firebasestorage.app",
-  "messagingSenderId": "123456789",
-  "appId": "1:123456789:web:abcde",
-  "measurementId": "G-123456"
+### Paso 4: Reglas de Seguridad de Firestore
+Tus ventas y usuarios son privados, pero tus productos deben ser públicos para la tienda web.
+En Firestore Database, ve a la pestaña **Reglas (Rules)**, borra lo que hay y pega exactamente esto:
+
+```javascript
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Los productos y banners son públicos (solo lectura)
+    match /productos/{document=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    match /banners/{document=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    
+    // Colecciones Privadas: Solo personal logueado
+    match /usuarios/{document=**} {
+      allow read, write: if request.auth != null;
+    }
+    match /ventas/{document=**} {
+      allow read, write: if request.auth != null;
+    }
+    match /compras_listas/{document=**} {
+      allow read, write: if request.auth != null;
+    }
+    match /web_config/{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
 }
 ```
 
-La aplicación guardará este código localmente en tu computadora de forma segura.
+### Paso 5: Reglas de Seguridad de Storage (Imágenes)
+En el menú izquierdo, ve a **Storage** y habilítalo. Ve a la pestaña **Reglas (Rules)** y pega esto:
 
-### 4. Ingreso Inicial o Sincronización
-
-- **Si es una instalación en un proyecto nuevo de Firebase:** El sistema detectará que la nube está vacía y te creará un usuario administrador local por defecto al instante. 
-  - **Usuario:** `admin`
-  - **Contraseña:** `admin`
-- **Si estás instalando en una segunda computadora o restaurante:** El sistema detectará que la nube ya tiene productos. Te llevará al Login y te pedirá las credenciales de tu empleado real (previamente creado). Una vez inicies sesión, el sistema iniciará una **Descarga Automática Masiva** de todo tu inventario, ventas, y configuraciones hacia la PC local sin que tengas que hacer nada.
+```javascript
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Cualquier persona puede ver las fotos de los productos
+    match /productos/{imageId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    // Para banners de la tienda web
+    match /banners/{imageId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+  }
+}
+```
 
 ---
 
-## 🛠 Compilar la Aplicación (.exe)
+## 💻 Instalación y Uso del POS
 
-Para generar el instalador de Windows y poder distribuirlo a los cajeros o administradores:
-```bash
-npm run dist
-```
-Encontrarás el instalador empaquetado dentro de la carpeta `release/`.
+1. Clona el repositorio:
+   ```bash
+   git clone [URL_DEL_REPOSITORIO]
+   ```
+2. Instala las dependencias:
+   ```bash
+   cd tienda-pos
+   npm install
+   ```
+3. Ejecuta la aplicación en modo desarrollo:
+   ```bash
+   npm run dev
+   ```
+
+### Sincronización Inicial (Primer Uso)
+Al abrir el programa por primera vez, verás una pantalla de **Configuración de Firebase**.
+1. Pega ahí el **JSON de Configuración** que obtuviste en el Paso 1 de Firebase.
+2. El sistema validará la conexión y te enviará al **Login**.
+3. Inicia sesión con el **Correo y Contraseña** del usuario que creaste en el Paso 2 de Authentication.
+4. Una vez ingreses, el sistema te mostrará un mensaje de **"Descargando base de datos..."**. La primera vez será casi instantáneo porque está vacío, pero preparará todo tu sistema local.
+
+¡Listo! Ya puedes empezar a crear productos desde el POS. Estos productos se subirán automáticamente a Firebase y tu Tienda Web podrá leerlos de inmediato.
+
+---
+
+## 🛠️ Comandos Adicionales
+
+- `npm run build`: Empaqueta la aplicación para distribución en Windows (genera un instalador `.exe` en la carpeta `dist/`).

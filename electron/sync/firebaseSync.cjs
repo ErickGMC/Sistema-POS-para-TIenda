@@ -50,7 +50,7 @@ async function saveFirebaseConfig(config) {
         
         let isEmpty = false;
 
-        // Validación de Conexión y Descarga Inicial
+        // Validación de Conexión
         try {
             // Intentamos leer un documento de la colección productos que debe tener 'allow read: if true;'
             const prodSnap = await withTimeout(
@@ -61,45 +61,10 @@ async function saveFirebaseConfig(config) {
             
             isEmpty = prodSnap.empty;
             
-            // Detección de estado de base de datos para configuración de Admin Local
-            if (isEmpty) {
-                crearAdminPorDefecto();
-                
-                // Intentar registrar el admin en Firebase de inmediato
-                const newAdmin = db.prepare('SELECT * FROM usuarios WHERE username = ?').get('admin');
-                if (newAdmin) {
-                    try {
-                        const email = 'admin@minimarketflor.com';
-                        // Intentamos crear cuenta en Firebase Auth
-                        try {
-                            await createUserWithEmailAndPassword(secondaryAuth, email, 'admin');
-                        } catch (authErr) {
-                            if (authErr.code !== 'auth/email-already-in-use') throw authErr;
-                        }
-                        
-                        // Guardar en colección usuarios
-                        const docRef = doc(firestore, 'usuarios', newAdmin.id);
-                        const { password_hash, salt, ...adminData } = newAdmin;
-                        if (adminData.permisos) {
-                            try { adminData.permisos = JSON.parse(adminData.permisos); } catch(e){}
-                        }
-                        adminData.activo = true;
-                        
-                        await setDoc(docRef, adminData, { merge: true });
-                        console.log("Admin sincronizado exitosamente con nube.");
-                    } catch (e) {
-                        console.error("Error al registrar admin en la nube en setup:", e);
-                    }
-                }
-            } else {
-                // Base de datos existente: limpiamos usuarios locales y descargamos TODO
+            if (!isEmpty) {
+                // Base de datos existente: limpiamos usuarios locales, forzando la descarga en el Login
                 limpiarUsuariosLocales();
-                const descResult = await descargarDatosDesdeNube();
-                if (!descResult.success) {
-                    throw new Error("No se pudo descargar la base de datos: " + descResult.error);
-                }
             }
-            
         } catch (validationErr) {
             console.error("Fallo la validación de Firebase Config:", validationErr);
             
@@ -109,7 +74,7 @@ async function saveFirebaseConfig(config) {
             
             let userMsg = validationErr.message;
             if (validationErr.code === 'permission-denied') {
-                userMsg = "Permisos denegados (permission-denied). Asegúrate de haber publicado las Reglas de Seguridad en Firestore.";
+                userMsg = "Permisos denegados. Asegúrate de que la colección 'productos' tenga permisos de lectura pública.";
             } else if (validationErr.code?.includes('invalid-api-key') || (validationErr.message && validationErr.message.includes('API key'))) {
                 userMsg = "El API Key de tu configuración es inválido. Revisa tu archivo JSON.";
             }

@@ -43,6 +43,11 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.on('sync:error', listener);
     return () => ipcRenderer.removeListener('sync:error', listener);
   },
+  onSyncStatus: (callback) => {
+    const listener = (_, msg) => callback(msg);
+    ipcRenderer.on('sync:status', listener);
+    return () => ipcRenderer.removeListener('sync:status', listener);
+  },
   
   // Web Config & Banners
   obtenerWebConfig: () => ipcRenderer.invoke('db:obtenerWebConfig'),

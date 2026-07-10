@@ -1,6 +1,6 @@
 const { db, crearAdminPorDefecto, limpiarUsuariosLocales } = require('../database/db.cjs');
 const { initializeApp, deleteApp, getApps } = require('firebase/app');
-const { getFirestore, doc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField } = require('firebase/firestore');
+const { getFirestore, doc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField, setDoc } = require('firebase/firestore');
 const { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } = require('firebase/auth');
 const { getStorage, ref, uploadBytes, getDownloadURL } = require('firebase/storage');
 
@@ -43,30 +43,70 @@ function getFirebaseConfig() {
 
 async function saveFirebaseConfig(config) {
     try {
-        // Validación de Conexión: Intentamos conectarnos a la base de datos con estas credenciales
+        const configPath = getConfigPath();
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+        firebaseConfig = config;
+        initFirebase();
+        
+        let isEmpty = false;
+
+        // Validación de Conexión y Descarga Inicial
         try {
-            const tempApp = initializeApp(config, 'TempValidationApp');
-            const tempFirestore = getFirestore(tempApp);
-            
             // Intentamos leer un documento de la colección productos que debe tener 'allow read: if true;'
             const prodSnap = await withTimeout(
-                getDocs(query(collection(tempFirestore, 'productos'), limit(1))),
+                getDocs(query(collection(firestore, 'productos'), limit(1))),
                 7000, // 7 segundos máximo
                 "Tiempo de espera agotado al verificar las credenciales de Firebase."
             );
             
-            await deleteApp(tempApp);
+            isEmpty = prodSnap.empty;
             
             // Detección de estado de base de datos para configuración de Admin Local
-            if (prodSnap.empty) {
+            if (isEmpty) {
                 crearAdminPorDefecto();
+                
+                // Intentar registrar el admin en Firebase de inmediato
+                const newAdmin = db.prepare('SELECT * FROM usuarios WHERE username = ?').get('admin');
+                if (newAdmin) {
+                    try {
+                        const email = 'admin@minimarketflor.com';
+                        // Intentamos crear cuenta en Firebase Auth
+                        try {
+                            await createUserWithEmailAndPassword(secondaryAuth, email, 'admin');
+                        } catch (authErr) {
+                            if (authErr.code !== 'auth/email-already-in-use') throw authErr;
+                        }
+                        
+                        // Guardar en colección usuarios
+                        const docRef = doc(firestore, 'usuarios', newAdmin.id);
+                        const { password_hash, salt, ...adminData } = newAdmin;
+                        if (adminData.permisos) {
+                            try { adminData.permisos = JSON.parse(adminData.permisos); } catch(e){}
+                        }
+                        adminData.activo = true;
+                        
+                        await setDoc(docRef, adminData, { merge: true });
+                        console.log("Admin sincronizado exitosamente con nube.");
+                    } catch (e) {
+                        console.error("Error al registrar admin en la nube en setup:", e);
+                    }
+                }
             } else {
-                // Base de datos existente: forzamos el login desde la nube
+                // Base de datos existente: limpiamos usuarios locales y descargamos TODO
                 limpiarUsuariosLocales();
+                const descResult = await descargarDatosDesdeNube();
+                if (!descResult.success) {
+                    throw new Error("No se pudo descargar la base de datos: " + descResult.error);
+                }
             }
             
         } catch (validationErr) {
             console.error("Fallo la validación de Firebase Config:", validationErr);
+            
+            // Revertir configuracion si falla de forma crítica
+            try { fs.unlinkSync(configPath); } catch(e) {}
+            firebaseConfig = null;
+            
             let userMsg = validationErr.message;
             if (validationErr.code === 'permission-denied') {
                 userMsg = "Permisos denegados (permission-denied). Asegúrate de haber publicado las Reglas de Seguridad en Firestore.";
@@ -76,10 +116,6 @@ async function saveFirebaseConfig(config) {
             return { success: false, error: `Error de Validación: ${userMsg}` };
         }
 
-        const configPath = getConfigPath();
-        fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
-        firebaseConfig = config;
-        initFirebase();
         return { success: true };
     } catch(e) {
         return { success: false, error: e.message };

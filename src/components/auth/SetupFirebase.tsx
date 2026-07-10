@@ -8,13 +8,13 @@ interface SetupFirebaseProps {
 export default function SetupFirebase({ onSuccess }: SetupFirebaseProps) {
   const [jsonConfig, setJsonConfig] = useState('');
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loadingMsg, setLoadingMsg] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!jsonConfig.trim()) return;
     
-    setLoading(true);
+    setLoadingMsg('Validando credenciales y conectando con la nube...');
     setError('');
     
     try {
@@ -35,6 +35,7 @@ export default function SetupFirebase({ onSuccess }: SetupFirebaseProps) {
       }
 
       // Send to Electron
+      setLoadingMsg('Sincronizando información. Por favor, no cierres la aplicación...');
       const result = await (window as any).electron.setFirebaseConfig(parsedConfig);
       if (result.success) {
         onSuccess();
@@ -44,7 +45,7 @@ export default function SetupFirebase({ onSuccess }: SetupFirebaseProps) {
     } catch (err: any) {
       setError(err.message || 'Error desconocido');
     } finally {
-      setLoading(false);
+      setLoadingMsg('');
     }
   };
 
@@ -105,11 +106,11 @@ export default function SetupFirebase({ onSuccess }: SetupFirebaseProps) {
 
             <button
               type="submit"
-              disabled={loading}
-              className="w-full bg-blue-500 hover:bg-blue-400 text-slate-950 font-bold text-lg rounded-xl py-3.5 mt-4 transition-all duration-300 shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2 group disabled:opacity-70"
+              disabled={!!loadingMsg}
+              className="w-full bg-blue-500 hover:bg-blue-400 text-slate-950 font-bold text-lg rounded-xl py-3.5 mt-4 transition-all duration-300 shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2 group disabled:opacity-70 disabled:cursor-wait"
             >
-              <CheckCircle size={20} className="group-hover:scale-110 transition-transform" />
-              {loading ? 'Validando...' : 'Guardar y Continuar'}
+              <CheckCircle size={20} className={loadingMsg ? "animate-pulse" : "group-hover:scale-110 transition-transform"} />
+              {loadingMsg ? loadingMsg : 'Guardar y Continuar'}
             </button>
           </form>
           

@@ -171,7 +171,14 @@ async function sincronizarCola() {
     const registrosProcesados = [];
     let ultimoError = null;
 
-    for (const reg of registros) {
+    for (let i = 0; i < registros.length; i++) {
+        const reg = registros[i];
+        
+        // Chunking para no bloquear el Main Thread
+        if (i > 0 && i % 20 === 0) {
+            await new Promise(resolve => setImmediate(resolve));
+        }
+
         try {
             const data = JSON.parse(reg.datos_json);
             
@@ -213,35 +220,12 @@ async function sincronizarCola() {
                 }
             } else if (reg.entidad === 'usuario') {
                 const docRef = doc(firestore, 'usuarios', reg.entidad_id);
-                const { password, ...usuarioData } = data;
+                const usuarioData = data;
                 
-                if (reg.operacion === 'INSERT') {
-                    let email = usuarioData.email || usuarioData.username;
-                    if (!email.includes('@')) {
-                        email = `${email}@minimarketflor.com`;
-                    }
-                    
-                    try {
-                        await withTimeout(
-                            createUserWithEmailAndPassword(secondaryAuth, email, password || 'admin123'),
-                            10000,
-                            "Tiempo de espera agotado al registrar colaborador en Firebase Auth (10s)"
-                        );
-                    } catch (authErr) {
-                        if (authErr.code !== 'auth/email-already-in-use') {
-                            throw authErr;
-                        }
-                    }
-                    batch.set(docRef, usuarioData, { merge: true });
-                } else if (reg.operacion === 'UPDATE') {
+                if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
                     batch.set(docRef, usuarioData, { merge: true });
                 } else if (reg.operacion === 'DELETE') {
                     batch.delete(docRef);
-                }
-                
-                // Remove password from local sync_queue for security
-                if (password) {
-                    db.prepare("UPDATE sync_queue SET datos_json = ? WHERE id = ?").run(JSON.stringify(usuarioData), reg.id);
                 }
             } else if (reg.entidad === 'web_config') {
                 const docRef = doc(firestore, 'web_config', reg.entidad_id);
@@ -423,7 +407,13 @@ async function descargarDatosDesdeNube() {
         const ventasList = [];
         const ventasSnap = await getDocs(collection(firestore, 'ventas'));
         
-        for (const docSnap of ventasSnap.docs) {
+        for (let i = 0; i < ventasSnap.docs.length; i++) {
+            const docSnap = ventasSnap.docs[i];
+            
+            if (i > 0 && i % 50 === 0) {
+                await new Promise(resolve => setImmediate(resolve));
+            }
+            
             const v = docSnap.data();
             const ventaId = docSnap.id;
             const detalles = [];
@@ -608,6 +598,29 @@ async function descargarDatosDesdeNube() {
     }
 }
 
+async function crearUsuarioAuth(email, password) {
+    if (!firebaseConfig) return { success: false, error: 'Firebase no configurado' };
+    try {
+        let authEmail = email;
+        if (!authEmail.includes('@')) {
+            const db = require('../database/db.cjs');
+            const conf = db.obtenerWebConfig();
+            let domain = 'minimarket.com';
+            if (conf.success && conf.config && conf.config.emailDomain) {
+                domain = conf.config.emailDomain;
+            }
+            authEmail = `${authEmail}@${domain}`;
+        }
+        await createUserWithEmailAndPassword(secondaryAuth, authEmail, password);
+        return { success: true };
+    } catch (authErr) {
+        if (authErr.code === 'auth/email-already-in-use') {
+            return { success: true }; 
+        }
+        return { success: false, error: authErr.message };
+    }
+}
+
 module.exports = {
     startSyncWorker,
     sincronizarCola,
@@ -617,5 +630,6 @@ module.exports = {
     subirImagenStorage,
     getFirebaseConfig,
     saveFirebaseConfig,
-    descargarDatosDesdeNube
+    descargarDatosDesdeNube,
+    crearUsuarioAuth
 };

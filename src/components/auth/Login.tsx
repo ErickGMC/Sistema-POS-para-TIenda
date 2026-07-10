@@ -20,6 +20,7 @@ export default function Login() {
     } else {
        // fallback manual
        try {
+           // @ts-ignore
            require('electron').ipcRenderer.on('sync:status', handleSyncStatus);
        } catch (e) {}
     }

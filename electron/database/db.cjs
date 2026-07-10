@@ -22,46 +22,51 @@ const schema = fs.readFileSync(schemaPath, 'utf8');
 db.exec(schema);
 
 // Migraciones de Base de Datos
-try {
-    db.exec("ALTER TABLE usuarios ADD COLUMN activo INTEGER DEFAULT 1");
-} catch {
-    // La columna ya existe
-}
-try {
-    db.exec("ALTER TABLE ventas ADD COLUMN clienteNombre TEXT");
-} catch {
-    // La columna ya existe
-}
-try {
-    db.exec("ALTER TABLE ventas ADD COLUMN clienteDocumento TEXT");
-} catch {
-    // La columna ya existe
-}
-try {
-    db.exec("ALTER TABLE productos ADD COLUMN thumbnailUrl TEXT");
-} catch {
-    // La columna ya existe
-}
-try {
-    db.exec("ALTER TABLE productos ADD COLUMN imagenLocal TEXT");
-} catch {
-    // La columna ya existe
-}
-try {
-    db.exec("ALTER TABLE productos ADD COLUMN thumbnailLocal TEXT");
-} catch {
-    // La columna ya existe
-}
-try {
-    db.exec("ALTER TABLE banners ADD COLUMN imagenLocal TEXT");
-} catch {
-    // La columna ya existe
-}
-try {
-    db.exec("CREATE TABLE IF NOT EXISTS correlativos (serie TEXT PRIMARY KEY, siguiente_numero INTEGER DEFAULT 1)");
-    db.exec("INSERT OR IGNORE INTO correlativos (serie, siguiente_numero) VALUES ('B001', 1)");
-} catch (e) {
-    console.error("Error creating correlativos table:", e);
+const migrations = [
+    // Version 1
+    () => {
+        db.exec("ALTER TABLE usuarios ADD COLUMN activo INTEGER DEFAULT 1");
+    },
+    // Version 2
+    () => {
+        db.exec("ALTER TABLE ventas ADD COLUMN clienteNombre TEXT");
+        db.exec("ALTER TABLE ventas ADD COLUMN clienteDocumento TEXT");
+    },
+    // Version 3
+    () => {
+        db.exec("ALTER TABLE productos ADD COLUMN thumbnailUrl TEXT");
+        db.exec("ALTER TABLE productos ADD COLUMN imagenLocal TEXT");
+        db.exec("ALTER TABLE productos ADD COLUMN thumbnailLocal TEXT");
+    },
+    // Version 4
+    () => {
+        db.exec("ALTER TABLE banners ADD COLUMN imagenLocal TEXT");
+    },
+    // Version 5
+    () => {
+        db.exec("CREATE TABLE IF NOT EXISTS correlativos (serie TEXT PRIMARY KEY, siguiente_numero INTEGER DEFAULT 1)");
+        db.exec("INSERT OR IGNORE INTO correlativos (serie, siguiente_numero) VALUES ('B001', 1)");
+    }
+];
+
+const currentVersion = db.pragma('user_version', { simple: true });
+if (currentVersion < migrations.length) {
+    console.log(`Migrating database from version ${currentVersion} to ${migrations.length}...`);
+    const transaction = db.transaction(() => {
+        for (let i = currentVersion; i < migrations.length; i++) {
+            try {
+                migrations[i]();
+            } catch (err) {
+                // Ignore "duplicate column" errors in case schema was partially applied before this system
+                if (!err.message.includes('duplicate column name')) {
+                    throw err;
+                }
+            }
+        }
+        db.pragma(`user_version = ${migrations.length}`);
+    });
+    transaction();
+    console.log('Database migrations completed successfully.');
 }
 
 function crearAdminPorDefecto() {
@@ -271,10 +276,7 @@ function crearUsuario(userData, password) {
 
         // Agregar a Sync Queue
         db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
-            'usuario', userData.id, 'INSERT', JSON.stringify({
-                ...userData,
-                password: password
-            })
+            'usuario', userData.id, 'INSERT', JSON.stringify(userData)
         );
 
         return { success: true };

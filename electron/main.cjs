@@ -1,6 +1,52 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const { z } = require('zod');
 const db = require('./database/db.cjs');
+
+// --- Esquemas de Validación (Zod) ---
+const ProductoSchema = z.object({
+  id: z.string().uuid().optional().or(z.string()),
+  codigoBarras: z.string().min(1),
+  nombre: z.string().min(1),
+  descripcion: z.string().optional(),
+  categoria: z.string().min(1),
+  precio: z.number().min(0),
+  costo: z.number().min(0).optional(),
+  stock: z.number().min(0),
+  unidadMedida: z.string().default('unidad'),
+  imagenUrl: z.string().nullable().optional(),
+  thumbnailUrl: z.string().nullable().optional(),
+  imagenLocal: z.string().nullable().optional(),
+  thumbnailLocal: z.string().nullable().optional(),
+  disponible: z.boolean().default(true),
+  destacado: z.boolean().default(false),
+  etiquetas: z.array(z.string()).default([])
+});
+
+const VentaSchema = z.object({
+  id: z.string().optional(),
+  total: z.number().min(0),
+  metodoPago: z.string(),
+  clienteNombre: z.string().nullable().optional(),
+  clienteDocumento: z.string().nullable().optional()
+});
+
+const VentaDetalleSchema = z.array(z.object({
+  id: z.string(),
+  producto_id: z.string(),
+  cantidad: z.number().min(0.01),
+  precio_unitario: z.number().min(0),
+  subtotal: z.number().min(0)
+}));
+
+const UsuarioSchema = z.object({
+  id: z.string().optional(),
+  username: z.string().min(3),
+  role: z.string(),
+  permisos: z.array(z.string()).optional(),
+  activo: z.boolean().optional()
+});
 
 // IPC para abrir enlaces externos (Ej: WhatsApp Web)
 ipcMain.handle('system:openExternal', async (event, url) => {
@@ -126,8 +172,18 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('usuarios:crear', async (_, { userData, password }) => {
     try {
-      return db.crearUsuario(userData, password);
+      const parsedUserData = UsuarioSchema.parse(userData);
+      z.string().min(6).parse(password);
+      
+      // Intentar crear en Firebase Auth primero
+      const firebaseSync = require('./sync/firebaseSync.cjs');
+      const authRes = await firebaseSync.crearUsuarioAuth(parsedUserData.username, password);
+      if (!authRes.success) {
+        return { success: false, error: authRes.error };
+      }
+      return db.crearUsuario(parsedUserData, password);
     } catch (err) {
+      if (err instanceof z.ZodError) return { success: false, error: 'Datos inválidos', issues: err.issues };
       return { success: false, error: err.message };
     }
   });
@@ -242,16 +298,20 @@ ipcMain.handle('db:obtenerTodosProductos', () => {
 
 ipcMain.handle('db:crearProducto', (event, producto) => {
   try {
-    return db.crearProducto(producto);
+    const parsed = ProductoSchema.parse(producto);
+    return db.crearProducto(parsed);
   } catch (err) {
+    if (err instanceof z.ZodError) return { success: false, error: 'Datos inválidos', issues: err.issues };
     return { success: false, error: err.message };
   }
 });
 
 ipcMain.handle('db:actualizarProducto', (event, producto) => {
   try {
-    return db.actualizarProducto(producto);
+    const parsed = ProductoSchema.parse(producto);
+    return db.actualizarProducto(parsed);
   } catch (err) {
+    if (err instanceof z.ZodError) return { success: false, error: 'Datos inválidos', issues: err.issues };
     return { success: false, error: err.message };
   }
 });
@@ -266,8 +326,11 @@ ipcMain.handle('db:eliminarProducto', (event, id) => {
 
 ipcMain.handle('db:guardarVenta', (event, venta, detalle) => {
   try {
-    return db.guardarVenta(venta, detalle);
+    const parsedVenta = VentaSchema.parse(venta);
+    const parsedDetalle = VentaDetalleSchema.parse(detalle);
+    return db.guardarVenta(parsedVenta, parsedDetalle);
   } catch (err) {
+    if (err instanceof z.ZodError) return { success: false, error: 'Datos de venta inválidos', issues: err.issues };
     return { success: false, error: err.message };
   }
 });

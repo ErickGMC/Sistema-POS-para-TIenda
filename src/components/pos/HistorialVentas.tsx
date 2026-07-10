@@ -77,7 +77,7 @@ export default function HistorialVentas() {
       return;
     }
 
-    let texto = `*FLOR POS - TICKET DE VENTA*%0A`;
+    let texto = `*SISTEMA POS - TICKET DE VENTA*%0A`;
     texto += `Ticket ID: ${venta.id.toUpperCase()}%0A`;
     texto += `Fecha: ${formatearFecha(venta.fecha)}%0A`;
     texto += `--------------------------------%0A`;

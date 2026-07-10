@@ -43,7 +43,14 @@ export default function CajaRegistradora() {
           console.error(err);
         }
       } else {
-        setSuggestions([]);
+        try {
+          const results = await (window as any).electron.obtenerTodosProductos();
+          const destacados = results.filter((p: any) => p.destacado);
+          setSuggestions(destacados || []);
+          setSelectedIndex(0);
+        } catch (err) {
+          setSuggestions([]);
+        }
       }
     };
 
@@ -214,7 +221,7 @@ export default function CajaRegistradora() {
       });
     };
 
-    let texto = `*FLOR POS - TICKET DE VENTA*%0A`;
+    let texto = `*SISTEMA POS - TICKET DE VENTA*%0A`;
     texto += `Ticket ID: ${ventaCompletada.id.toUpperCase()}%0A`;
     texto += `Fecha: ${formatearFecha(ventaCompletada.fecha)}%0A`;
     texto += `--------------------------------%0A`;
@@ -286,7 +293,7 @@ export default function CajaRegistradora() {
         {/* Sugerencias de Búsqueda */}
         <div className={`flex-1 overflow-y-auto bg-slate-900 custom-scrollbar ${viewMode === 'grid' ? 'p-4' : ''}`}>
           {suggestions.length > 0 ? (
-            <div className={viewMode === 'grid' ? 'grid grid-cols-2 lg:grid-cols-3 gap-4' : 'flex flex-col divide-y divide-slate-800'}>
+            <div className={viewMode === 'grid' ? 'grid grid-cols-3 lg:grid-cols-4 gap-2' : 'flex flex-col divide-y divide-slate-800'}>
               {suggestions.map((prod, idx) => {
                 const isSelected = idx === selectedIndex;
                 return viewMode === 'list' ? (
@@ -341,7 +348,7 @@ export default function CajaRegistradora() {
                       isSelected ? 'border-emerald-500 shadow-lg shadow-emerald-500/20 scale-[1.02]' : 'border-slate-700 hover:border-slate-600 hover:scale-[1.01]'
                     }`}
                   >
-                    <div className="h-32 w-full bg-slate-900 relative">
+                    <div className="h-24 w-full bg-slate-900 relative">
                       {prod.imagenUrl ? (
                         <img src={prod.imagenUrl} alt={prod.nombre} className="w-full h-full object-contain" />
                       ) : (
@@ -362,7 +369,7 @@ export default function CajaRegistradora() {
                       <div className="mt-auto pt-2 flex justify-between items-end border-t border-slate-700/50">
                         <div className="flex flex-col">
                           <span className="text-[10px] text-slate-500 uppercase tracking-wider">Precio</span>
-                          <span className="font-black text-lg text-emerald-400">S/ {prod.precio.toFixed(2)}</span>
+                          <span className="font-black text-md text-emerald-400">S/ {prod.precio.toFixed(2)}</span>
                         </div>
                         <div className={`text-xs font-medium px-2 py-1 rounded bg-slate-900 ${isSelected ? 'text-emerald-400' : 'text-slate-400'}`}>
                           Stk: {prod.stock}

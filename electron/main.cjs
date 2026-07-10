@@ -48,10 +48,20 @@ const UsuarioSchema = z.object({
   activo: z.boolean().optional()
 });
 
-// IPC para abrir enlaces externos (Ej: WhatsApp Web)
+// IPC para abrir enlaces externos — con validación de URL
 ipcMain.handle('system:openExternal', async (event, url) => {
-  await shell.openExternal(url);
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      await shell.openExternal(url);
+    } else {
+      console.warn('Blocked openExternal for unsafe protocol:', parsed.protocol);
+    }
+  } catch (e) {
+    console.error('Invalid URL for openExternal:', url, e);
+  }
 });
+
 const { startSyncWorker } = require('./sync/firebaseSync.cjs');
 const { optimizeImageToWebp } = require('./utils/imageOptimizer.cjs');
 
@@ -70,7 +80,6 @@ function createWindow() {
     }
   });
 
-  // Si estamos en desarrollo, cargamos el puerto de Vite. Si no, cargamos el build.
   const isDev = process.env.NODE_ENV === 'development';
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
@@ -79,7 +88,6 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
-  // Quitar el menú por defecto de Electron para aspecto de app kiosko/POS
   mainWindow.setMenuBarVisibility(false);
 }
 
@@ -96,73 +104,95 @@ app.whenReady().then(() => {
 
   createWindow();
   
-  // --- IPC Handlers (Auth y Usuarios) ---
+  // ====================================================================
+  // AUTH: Nuevo flujo — Firebase Auth primero, luego local
+  // ====================================================================
   ipcMain.handle('auth:login', async (_, { username, password }) => {
-    let finalRes = { success: false, error: 'Credenciales inválidas' };
-    let localRes = db.login(username, password);
-
     const { loginConFirebase, descargarDatosDesdeNube } = require('./sync/firebaseSync.cjs');
 
-    const tryAutoDownload = async () => {
-      try {
-        const prodCount = db.obtenerTodosProductos().length;
-        if (prodCount === 0) {
-          const { BrowserWindow } = require('electron');
-          BrowserWindow.getAllWindows().forEach(win => {
-              win.webContents.send('sync:status', 'Descargando base de datos, por favor espere...');
-          });
-          console.log("Base de datos local vacía. Auto-descargando desde la nube tras login exitoso...");
-          await descargarDatosDesdeNube();
-        }
-      } catch(e) { console.error("Error en auto-descarga:", e); }
+    // Notificar al frontend que estamos verificando
+    const notificar = (msg) => {
+      BrowserWindow.getAllWindows().forEach(win => {
+        if (!win.isDestroyed()) win.webContents.send('sync:status', msg);
+      });
     };
 
-    if (localRes.success) {
-      finalRes = localRes;
-      try {
-        const fbRes = await loginConFirebase(username, password, true); // Sincroniza auth con Firebase, crea si es admin inicial
-        
-        if (!fbRes.success) {
-            console.warn("Advertencia de Firebase Auth en background:", fbRes.error);
-            // Avisar al frontend (el login local procede para modo offline)
-            const { BrowserWindow } = require('electron');
-            BrowserWindow.getAllWindows().forEach(win => {
-                let msg = `Aviso de Nube: ${fbRes.error}`;
-                if (fbRes.code === 'auth/operation-not-allowed') {
-                    msg = "Configuración faltante: Debes habilitar 'Correo electrónico/Contraseña' en la sección Authentication de tu consola Firebase para sincronizar.";
-                }
-                win.webContents.send('sync:error', msg);
-            });
-        } else {
-            await tryAutoDownload();
+    // PASO 1: Intentar login contra Firebase Auth (obligatorio si hay internet)
+    let firebaseLoginOk = false;
+    let firebaseUid = null;
+
+    try {
+      notificar('Verificando credenciales en la nube...');
+      const fbRes = await loginConFirebase(username, password);
+      
+      if (fbRes.success) {
+        firebaseLoginOk = true;
+        firebaseUid = fbRes.uid;
+      } else {
+        // Firebase falló — intentar login local como fallback offline
+        const localRes = db.login(username, password);
+        if (localRes.success) {
+          // Login local exitoso (modo offline)
+          notificar('');
+          return localRes;
         }
-      } catch (e) {
-        console.error("Error background auth firebase:", e);
+        // Ambos fallaron — retornar el error de Firebase
+        notificar('');
+        return { success: false, error: fbRes.error || 'Credenciales inválidas' };
       }
-    } else {
-      // 2. Si falla localmente, intentar con Firebase Auth
-      try {
-        const fbRes = await loginConFirebase(username, password, false);
-        if (fbRes.success) {
-          const registrarRes = db.registrarUsuarioDesdeFirebase(fbRes.uid, username, password, 'admin');
-          if (registrarRes.success) {
-            finalRes = db.login(username, password);
-            await tryAutoDownload();
-          }
-        } else {
-          if (fbRes.code === 'auth/wrong-password' || fbRes.code === 'auth/invalid-credential' || fbRes.code === 'auth/invalid-login-credentials') {
-            finalRes = { success: false, error: 'Contraseña incorrecta' };
-          } else if (fbRes.code === 'auth/user-not-found' || fbRes.code === 'auth/invalid-email') {
-            finalRes = { success: false, error: 'Usuario incorrecto' };
-          }
-        }
-      } catch (e) {
-        console.error('Error en login Firebase:', e);
+    } catch (e) {
+      console.error('Error en Firebase Auth:', e);
+      // Si Firebase no responde, intentar login local
+      const localRes = db.login(username, password);
+      if (localRes.success) {
+        notificar('');
+        return localRes;
       }
+      notificar('');
+      return { success: false, error: 'Error de conexión. Verifica tu internet.' };
     }
+
+    // PASO 2: Firebase Auth exitoso — registrar/actualizar usuario localmente
+    const localUser = db.registrarUsuarioDesdeFirebase(firebaseUid, username, password, 'admin');
     
-    return finalRes;
+    // PASO 3: Descargar BD completa si la base local está vacía (primera instalación)
+    try {
+      const prodCount = db.obtenerTodosProductos().length;
+      if (prodCount === 0) {
+        notificar('Descargando base de datos desde la nube...');
+        console.log("Base de datos local vacía. Descargando desde la nube tras login exitoso...");
+        const dlRes = await descargarDatosDesdeNube();
+        if (!dlRes.success) {
+          console.error("Error en descarga automática:", dlRes.error);
+          notificar('');
+          // Aún así dejamos que entre — tendrá la BD vacía pero podrá reintentar
+        }
+      }
+    } catch (e) {
+      console.error("Error en auto-descarga:", e);
+    }
+
+    // PASO 4: Hacer login local con las credenciales ya registradas
+    notificar('');
+    const finalRes = db.login(username, password);
+    if (finalRes.success) {
+      return finalRes;
+    }
+
+    // Si por alguna razón el login local falla después de registrar, retornar un usuario mínimo
+    return {
+      success: true,
+      user: {
+        id: firebaseUid,
+        username: username,
+        role: 'admin',
+        permisos: ['all'],
+        activo: 1
+      }
+    };
   });
+
+  // --- IPC Handlers (Usuarios) ---
   ipcMain.handle('usuarios:obtener', async () => {
     try {
       return db.obtenerUsuarios();
@@ -175,7 +205,7 @@ app.whenReady().then(() => {
       const parsedUserData = UsuarioSchema.parse(userData);
       z.string().min(6).parse(password);
       
-      // Intentar crear en Firebase Auth primero
+      // Crear en Firebase Auth primero
       const firebaseSync = require('./sync/firebaseSync.cjs');
       const authRes = await firebaseSync.crearUsuarioAuth(parsedUserData.username, password);
       if (!authRes.success) {
@@ -202,10 +232,10 @@ app.whenReady().then(() => {
     }
   });
 
-  // Iniciar worker de sincronización en background
+  // Iniciar worker de sincronización
   startSyncWorker();
 
-  // IPC Handlers de Imágenes y Sincronización
+  // IPC Handlers de Imágenes
   ipcMain.handle('img:procesarLocal', async (event, buffer, fileName, type) => {
     try {
       const { optimizeImageToWebp } = require('./utils/imageOptimizer.cjs');
@@ -217,6 +247,7 @@ app.whenReady().then(() => {
     }
   });
 
+  // IPC Handlers de Sincronización
   ipcMain.handle('sync:startManualSync', async () => {
     const { sincronizarCola } = require('./sync/firebaseSync.cjs');
     await sincronizarCola();
@@ -343,23 +374,6 @@ ipcMain.handle('db:obtenerVentas', (event, filtros) => {
   }
 });
 
-// Image Optimization IPC
-ipcMain.handle('img:procesarYSubir', async (event, arrayBuffer, fileName, type = 'producto') => {
-  const nodeBuffer = Buffer.from(arrayBuffer);
-  const optResult = await optimizeImageToWebp(nodeBuffer, type);
-  
-  if (!optResult.success) return optResult;
-  
-  return { 
-      success: true, 
-      url: optResult.base64,
-      thumbnailUrl: null,
-      imagenLocal: null,
-      thumbnailLocal: null
-  };
-});
-
-
 // Printing IPC
 ipcMain.handle('printer:printTicket', async (event, htmlContent) => {
   return new Promise((resolve) => {
@@ -368,7 +382,6 @@ ipcMain.handle('printer:printTicket', async (event, htmlContent) => {
       webPreferences: { nodeIntegration: false, contextIsolation: true }
     });
     
-    // Load HTML using data URI
     const dataUri = 'data:text/html;charset=utf-8,' + encodeURIComponent(htmlContent);
     printWindow.loadURL(dataUri);
 

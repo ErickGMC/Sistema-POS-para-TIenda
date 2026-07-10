@@ -175,7 +175,7 @@ export function generarHtmlTicket(
 
         <div class="footer">
           <p>${leyenda}</p>
-          <p style="margin-top: 6px;">Representación impresa generada por FLOR POS</p>
+          <p style="margin-top: 6px;">Representación impresa generada por SISTEMA POS</p>
         </div>
 
       </body>

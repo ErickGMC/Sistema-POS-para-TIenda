@@ -5,7 +5,6 @@ contextBridge.exposeInMainWorld('electron', {
   openExternal: (url) => ipcRenderer.invoke('system:openExternal', url),
   buscarProductoPorCodigo: (codigo) => ipcRenderer.invoke('db:buscarProductoPorCodigo', codigo),
   buscarProductosPorNombre: (nombre) => ipcRenderer.invoke('db:buscarProductosPorNombre', nombre),
-  obtenerProductosRiesgoStock: () => ipcRenderer.invoke('db:obtenerProductosRiesgoStock'),
   obtenerTodosProductos: () => ipcRenderer.invoke('db:obtenerTodosProductos'),
   crearProducto: (producto) => ipcRenderer.invoke('db:crearProducto', producto),
   actualizarProducto: (producto) => ipcRenderer.invoke('db:actualizarProducto', producto),

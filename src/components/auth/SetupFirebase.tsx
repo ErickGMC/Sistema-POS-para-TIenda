@@ -72,6 +72,18 @@ export default function SetupFirebase({ onSuccess }: SetupFirebaseProps) {
               <label className="text-sm font-medium text-slate-300 ml-1 flex justify-between">
                 <span>Configuración JSON de Firebase</span>
               </label>
+
+              <div className="bg-blue-500/10 border border-blue-500/20 p-4 rounded-xl text-sm text-blue-200 mb-4">
+                <p className="font-semibold mb-1">¿Cómo obtener estas credenciales?</p>
+                <ol className="list-decimal pl-4 space-y-1 text-slate-300">
+                  <li>Ve a <a href="https://console.firebase.google.com/" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">Firebase Console</a> y crea un proyecto.</li>
+                  <li>Ve a Configuración del Proyecto (Project Settings).</li>
+                  <li>En la pestaña "General", baja hasta "Tus aplicaciones" y añade una app Web (&lt;/&gt;).</li>
+                  <li>Copia el objeto <code className="bg-slate-800 px-1 rounded text-blue-300">firebaseConfig</code> que te proporciona Firebase y pégalo aquí abajo en formato JSON.</li>
+                  <li>Asegúrate de habilitar <strong>Firestore Database</strong>, <strong>Storage</strong> y <strong>Authentication (Email/Password)</strong> en tu proyecto.</li>
+                </ol>
+              </div>
+
               <div className="relative">
                 <textarea
                   autoFocus

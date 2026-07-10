@@ -7,49 +7,53 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Regla de Admin (Si tuvieras custom claims, aquí irían. Por ahora asumimos que solo los empleados tienen cuenta en Firebase Auth)
-    // function isAdmin() {
-    //   return isAuthenticated() && request.auth.token.admin == true;
-    // }
-
-    // COBERTURA POR COLECCIÓN (Deniega por defecto, acepta bajo condición)
-
     // PRODUCTOS:
-    // - Empleados logueados pueden leer, crear y editar. (El POS local valida sus permisos propios antes de enviar, pero aquí al menos exigimos login)
-    // - Si integras la tienda web abierta al público (E-commerce), necesitarás cambiar read: if true;
+    // - Lectura pública para la tienda web y catálogo
+    // - Escritura solo para empleados logueados
     match /productos/{document=**} {
-      allow read: if true; // Permitimos lectura pública para que el Dashboard Web o los clientes puedan ver los productos
-      allow write: if isAuthenticated(); // Solo empleados pueden alterar el inventario
+      allow read: if true;
+      allow write: if isAuthenticated();
     }
 
     // VENTAS:
-    // - Información hipercrítica. NADIE puede leer o escribir excepto los empleados logueados.
+    // - Información hipercrítica. Solo empleados logueados.
     match /ventas/{document=**} {
       allow read, write: if isAuthenticated();
     }
 
-    // ANALYTICS (Público):
-    // - Las visitas a la web se registran de forma anónima, así que cualquiera puede crear un registro de analytics
-    // - Pero solo los empleados pueden leerlas (para el Dashboard)
-    match /analytics/{document=**} {
+    // ANALYTICS EVENTS:
+    // - Las visitas a la web se registran de forma anónima (create público)
+    // - Solo los empleados pueden leerlas (para el Dashboard)
+    match /analytics_events/{document=**} {
       allow create: if true;
       allow read, update, delete: if isAuthenticated();
     }
 
     // USUARIOS (Roles):
-    // - Nadie debería poder leer la lista entera de empleados excepto ellos mismos.
+    // - Solo empleados autenticados pueden leer/escribir.
     match /usuarios/{document=**} {
       allow read, write: if isAuthenticated();
     }
 
-    // LISTAS DE COMPRA Y BANNERS:
-    // - Banners deben ser públicos para la tienda web
+    // WEB CONFIG:
+    // - Lectura pública para la tienda web (necesita config de WhatsApp, nombre, etc.)
+    // - Escritura solo para empleados logueados
+    match /web_config/{document=**} {
+      allow read: if true;
+      allow write: if isAuthenticated();
+    }
+
+    // BANNERS:
+    // - Lectura pública para la tienda web
+    // - Escritura solo para empleados logueados
     match /banners/{document=**} {
       allow read: if true;
       allow write: if isAuthenticated();
     }
 
-    match /lista_compra/{document=**} {
+    // LISTAS DE COMPRA (Reabastecimiento):
+    // - Solo empleados logueados
+    match /compras_listas/{document=**} {
       allow read, write: if isAuthenticated();
     }
 

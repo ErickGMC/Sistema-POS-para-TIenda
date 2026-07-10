@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '../../store/useAuthStore';
-import { Store, Lock, User, LogIn } from 'lucide-react';
+import { Store, Lock, User, LogIn, CloudDownload } from 'lucide-react';
 
 export default function Login() {
   const [username, setUsername] = useState('');
@@ -10,20 +10,16 @@ export default function Login() {
   const login = useAuthStore(state => state.login);
 
   useEffect(() => {
-    const handleSyncStatus = (_: any, msg: string) => {
-      setLoadingMsg(msg);
-    };
-    
-    // Asumimos que electron.ipcRenderer.on está expuesto o usamos una función similar
-    if ((window as any).electron.onSyncStatus) {
-      (window as any).electron.onSyncStatus(handleSyncStatus);
-    } else {
-       // fallback manual
-       try {
-           // @ts-ignore
-           require('electron').ipcRenderer.on('sync:status', handleSyncStatus);
-       } catch (e) {}
+    // Escuchar mensajes de estado de sincronización del proceso principal
+    let unsubscribe: (() => void) | null = null;
+    if ((window as any).electron?.onSyncStatus) {
+      unsubscribe = (window as any).electron.onSyncStatus((msg: string) => {
+        if (msg) setLoadingMsg(msg);
+      });
     }
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -36,17 +32,20 @@ export default function Login() {
     try {
       const result = await (window as any).electron.login(username, password);
       if (result.success) {
+        setLoadingMsg('');
         login(result.user);
       } else {
         setError(result.error || 'Credenciales inválidas');
+        setLoadingMsg('');
       }
     } catch (err) {
       console.error(err);
       setError('Error interno del sistema');
-    } finally {
       setLoadingMsg('');
     }
   };
+
+  const isDownloading = loadingMsg.toLowerCase().includes('descargando');
 
   return (
     <div className="min-h-screen w-screen bg-slate-950 flex flex-col items-center justify-center relative overflow-hidden">
@@ -60,8 +59,8 @@ export default function Login() {
             <div className="w-20 h-20 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-500/30 mb-6">
               <Store size={40} className="text-white" />
             </div>
-            <h1 className="text-3xl font-bold text-white tracking-tight">Flor POS</h1>
-            <p className="text-slate-400 mt-2 text-center text-sm">Ingresa tus credenciales para acceder al sistema</p>
+            <h1 className="text-3xl font-bold text-white tracking-tight">Sistema POS</h1>
+            <p className="text-slate-400 mt-2 text-center text-sm">Ingresa tus credenciales de Firebase Auth para acceder</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -72,7 +71,7 @@ export default function Login() {
             )}
 
             <div className="space-y-1">
-              <label className="text-sm font-medium text-slate-300 ml-1">Correo Electrónico</label>
+              <label className="text-sm font-medium text-slate-300 ml-1">Usuario</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500">
                   <User size={18} />
@@ -84,7 +83,7 @@ export default function Login() {
                   value={username}
                   onChange={e => setUsername(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl py-3 pl-11 pr-4 text-white outline-none transition-all"
-                  placeholder="tu@correo.com"
+                  placeholder="tu nombre de usuario"
                 />
               </div>
             </div>
@@ -111,8 +110,21 @@ export default function Login() {
               disabled={!!loadingMsg}
               className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-lg rounded-xl py-3.5 mt-4 transition-all duration-300 shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 group disabled:opacity-70 disabled:cursor-wait"
             >
-              <LogIn size={20} className={loadingMsg ? "animate-pulse" : "group-hover:translate-x-1 transition-transform"} />
-              {loadingMsg ? loadingMsg : 'Acceder al Sistema'}
+              {loadingMsg ? (
+                <>
+                  {isDownloading ? (
+                    <CloudDownload size={20} className="animate-bounce" />
+                  ) : (
+                    <LogIn size={20} className="animate-pulse" />
+                  )}
+                  <span className="text-sm">{loadingMsg}</span>
+                </>
+              ) : (
+                <>
+                  <LogIn size={20} className="group-hover:translate-x-1 transition-transform" />
+                  Acceder al Sistema
+                </>
+              )}
             </button>
           </form>
           

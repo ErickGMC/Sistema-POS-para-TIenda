@@ -1,4 +1,4 @@
-const { db, crearAdminPorDefecto, limpiarUsuariosLocales } = require('../database/db.cjs');
+const { db, limpiarUsuariosLocales } = require('../database/db.cjs');
 const { initializeApp, deleteApp, getApps } = require('firebase/app');
 const { getFirestore, doc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField, setDoc } = require('firebase/firestore');
 const { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } = require('firebase/auth');
@@ -15,9 +15,11 @@ let storage = null;
 let secondaryApp = null;
 let secondaryAuth = null;
 
+// Constante: Límite de operaciones por batch de Firestore
+const BATCH_LIMIT = 499;
+
 function getConfigPath() {
     const { app: eApp } = require('electron');
-    // En dev guardamos en root para que persista, en prod en userData
     const dbDir = eApp.isPackaged ? eApp.getPath('userData') : __dirname;
     return path.join(dbDir, 'firebase_config.json');
 }
@@ -41,6 +43,14 @@ function getFirebaseConfig() {
     return firebaseConfig;
 }
 
+// Helper: Construir email de Firebase Auth a partir del username
+// Usa SIEMPRE el projectId como dominio para garantizar consistencia
+function buildAuthEmail(username) {
+    if (username.includes('@')) return username;
+    const domain = firebaseConfig ? firebaseConfig.projectId : 'pos.local';
+    return `${username}@${domain}.com`;
+}
+
 async function saveFirebaseConfig(config) {
     try {
         const configPath = getConfigPath();
@@ -48,27 +58,19 @@ async function saveFirebaseConfig(config) {
         firebaseConfig = config;
         initFirebase();
         
-        let isEmpty = false;
-
         // Validación de Conexión
         try {
-            // Intentamos leer un documento de la colección productos que debe tener 'allow read: if true;'
-            const prodSnap = await withTimeout(
-                getDocs(query(collection(firestore, 'productos'), limit(1))),
-                7000, // 7 segundos máximo
                 "Tiempo de espera agotado al verificar las credenciales de Firebase."
             );
             
-            isEmpty = prodSnap.empty;
-            
-            if (!isEmpty) {
+            if (!prodSnap.empty) {
                 // Base de datos existente: limpiamos usuarios locales, forzando la descarga en el Login
                 limpiarUsuariosLocales();
             }
         } catch (validationErr) {
             console.error("Fallo la validación de Firebase Config:", validationErr);
             
-            // Revertir configuracion si falla de forma crítica
+            // Revertir configuración si falla
             try { fs.unlinkSync(configPath); } catch(e) {}
             firebaseConfig = null;
             
@@ -90,11 +92,28 @@ async function saveFirebaseConfig(config) {
 function initFirebase() {
     if (!firebaseConfig) return;
     try {
-        // Si ya existen instancias previas de Firebase en el proceso principal,
-        // debemos eliminarlas antes de volver a inicializar con el nuevo proyecto.
+        // Eliminar instancias previas de forma síncrona-segura
         const apps = getApps();
-        for (const existingApp of apps) {
-            deleteApp(existingApp).catch(e => console.error("Error al limpiar app de Firebase:", e));
+        if (apps.length > 0) {
+            // Usar un enfoque síncrono: simplemente re-obtener las instancias existentes
+            // deleteApp es async pero no podemos await aquí, así que evitamos reinicializar si ya existe
+            try {
+                app = apps.find(a => a.name === '[DEFAULT]') || null;
+                secondaryApp = apps.find(a => a.name === 'SecondaryAuthApp') || null;
+                
+                if (app && secondaryApp) {
+                    firestore = getFirestore(app);
+                    auth = getAuth(app);
+                    storage = getStorage(app);
+                    secondaryAuth = getAuth(secondaryApp);
+                    return; // Ya están inicializados
+                }
+                
+                // Si faltan, eliminar todo y reinicializar
+                for (const existingApp of apps) {
+                    try { deleteApp(existingApp); } catch(e) {}
+                }
+            } catch(e) {}
         }
 
         app = initializeApp(firebaseConfig);
@@ -114,7 +133,7 @@ function initFirebase() {
 // Intentar inicializar al arrancar
 loadConfig();
 
-// Helper para envolver promesas con tiempo de espera máximo (Timeout)
+// Helper para envolver promesas con timeout
 function withTimeout(promise, timeoutMs, errorMessage) {
     return Promise.race([
         promise,
@@ -122,26 +141,23 @@ function withTimeout(promise, timeoutMs, errorMessage) {
     ]);
 }
 
-// Verificar conexión a internet antes de sincronizar
+// Verificar conexión a internet
 function isOnline() {
     return new Promise((resolve) => {
         const timeout = setTimeout(() => {
-            console.log("isOnline: Tiempo de espera agotado al consultar DNS (Offline).");
             resolve(false);
-        }, 3000); // 3 segundos máximo
+        }, 3000);
         
         require('dns').lookup('google.com', function(err) {
             clearTimeout(timeout);
-            if (err) {
-               resolve(false);
-            } else {
-               resolve(true);
-            }
+            resolve(!err);
         });
     });
 }
 
-// Background Worker: Sincronizar cola
+// ====================================================================
+// SINCRONIZACIÓN: Cola SQLite → Firestore (con chunking de 500)
+// ====================================================================
 async function sincronizarCola() {
     const online = await isOnline();
     if (!online) {
@@ -160,159 +176,163 @@ async function sincronizarCola() {
         return;
     }
 
-    // Obtener registros pendientes (estado_sync = 0)
+    // Obtener registros pendientes
     const registros = db.prepare('SELECT * FROM sync_queue WHERE estado_sync = 0 ORDER BY fecha_creacion ASC').all();
     
     if (registros.length === 0) return;
     
     console.log(`Iniciando sincronización de ${registros.length} registros...`);
 
-    const batch = writeBatch(firestore);
-    const registrosProcesados = [];
+    // Dividir registros en chunks para respetar el límite de 500 operaciones por batch
+    const chunks = [];
+    for (let i = 0; i < registros.length; i += BATCH_LIMIT) {
+        chunks.push(registros.slice(i, i + BATCH_LIMIT));
+    }
+
+    let totalProcesados = 0;
     let ultimoError = null;
 
-    for (let i = 0; i < registros.length; i++) {
-        const reg = registros[i];
-        
-        // Chunking para no bloquear el Main Thread
-        if (i > 0 && i % 20 === 0) {
-            await new Promise(resolve => setImmediate(resolve));
-        }
+    for (const chunk of chunks) {
+        const batch = writeBatch(firestore);
+        const registrosProcesados = [];
 
-        try {
-            const data = JSON.parse(reg.datos_json);
+        for (let i = 0; i < chunk.length; i++) {
+            const reg = chunk[i];
             
-            if (reg.entidad === 'venta') {
-                const docRef = doc(firestore, 'ventas', reg.entidad_id);
-                batch.set(docRef, data.venta);
-                
-                // Los detalles podrían ir en subcolecciones, o como array
-                const detalleRef = doc(firestore, `ventas/${reg.entidad_id}/detalle`, 'items');
-                batch.set(detalleRef, { items: data.detalle });
-            } else if (reg.entidad === 'producto') {
-                const docRef = doc(firestore, 'productos', reg.entidad_id);
-                if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
-                    let finalData = { ...data };
-                    
-                    // Si hay una imagen local pendiente y NO hay URL (es nueva), subirla a Storage
-                    if (finalData.imagenLocal && !finalData.imagenUrl) {
-                        const base64Data = finalData.imagenLocal.replace(/^data:image\/\w+;base64,/, '');
-                        const imageBuffer = Buffer.from(base64Data, 'base64');
-                        const uploadRes = await subirImagenStorage(imageBuffer, 'producto', finalData.categoria);
-                        
-                        if (uploadRes.success) {
-                            finalData.imagenUrl = uploadRes.url;
-                            
-                            // Actualizar la base de datos local con la URL pública, pero SIN borrar la imagenLocal
-                            db.prepare('UPDATE productos SET imagenUrl = ? WHERE id = ?')
-                              .run(uploadRes.url, finalData.id);
-                        }
-                    }
-                    
-                    // IMPORTANTE: Eliminar la cadena pesada Base64 y fields obsoletos para que se borren en Firestore
-                    finalData.imagenLocal = deleteField();
-                    finalData.thumbnailLocal = deleteField();
-                    finalData.thumbnailUrl = deleteField();
-                    
-                    batch.set(docRef, finalData, { merge: true });
-                } else if (reg.operacion === 'DELETE') {
-                    batch.delete(docRef);
-                }
-            } else if (reg.entidad === 'usuario') {
-                const docRef = doc(firestore, 'usuarios', reg.entidad_id);
-                const usuarioData = data;
-                
-                if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
-                    batch.set(docRef, usuarioData, { merge: true });
-                } else if (reg.operacion === 'DELETE') {
-                    batch.delete(docRef);
-                }
-            } else if (reg.entidad === 'web_config') {
-                const docRef = doc(firestore, 'web_config', reg.entidad_id);
-                batch.set(docRef, data, { merge: true });
-            } else if (reg.entidad === 'banner') {
-                const docRef = doc(firestore, 'banners', reg.entidad_id);
-                if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
-                    let finalData = { ...data };
-                    
-                    if (finalData.imagenLocal && (!finalData.imageUrl || finalData.imageUrl === 'PENDIENTE')) {
-                        const base64Data = finalData.imagenLocal.replace(/^data:image\/\w+;base64,/, '');
-                        const imageBuffer = Buffer.from(base64Data, 'base64');
-                        const uploadRes = await subirImagenStorage(imageBuffer, 'banner', 'general');
-                        
-                        if (uploadRes.success) {
-                            finalData.imageUrl = uploadRes.url;
-                            
-                            db.prepare('UPDATE banners SET imageUrl = ? WHERE id = ?')
-                              .run(uploadRes.url, finalData.id);
-                        }
-                    }
-                    
-                    finalData.imagenLocal = deleteField();
-                    
-                    batch.set(docRef, finalData, { merge: true });
-                } else if (reg.operacion === 'DELETE') {
-                    batch.delete(docRef);
-                }
-            } else if (reg.entidad === 'lista_compra') {
-                const docRef = doc(firestore, 'compras_listas', reg.entidad_id);
-                if (reg.operacion === 'CREATE' || reg.operacion === 'UPDATE') {
-                    batch.set(docRef, data, { merge: true });
-                } else if (reg.operacion === 'DELETE') {
-                    batch.delete(docRef);
-                }
+            // Yield al event loop cada 20 registros
+            if (i > 0 && i % 20 === 0) {
+                await new Promise(resolve => setImmediate(resolve));
             }
 
-            registrosProcesados.push(reg.id);
-        } catch (e) {
-            console.error('Error procesando registro de sync:', e);
-            db.prepare('UPDATE sync_queue SET intentos = intentos + 1 WHERE id = ?').run(reg.id);
-            ultimoError = e;
+            try {
+                const data = JSON.parse(reg.datos_json);
+                
+                if (reg.entidad === 'venta') {
+                    const docRef = doc(firestore, 'ventas', reg.entidad_id);
+                    batch.set(docRef, data.venta);
+                    const detalleRef = doc(firestore, `ventas/${reg.entidad_id}/detalle`, 'items');
+                    batch.set(detalleRef, { items: data.detalle });
+                } else if (reg.entidad === 'producto') {
+                    const docRef = doc(firestore, 'productos', reg.entidad_id);
+                    if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
+                        let finalData = { ...data };
+                        
+                        // Si hay imagen local pendiente, subirla a Storage
+                        if (finalData.imagenLocal && !finalData.imagenUrl) {
+                            const base64Data = finalData.imagenLocal.replace(/^data:image\/\w+;base64,/, '');
+                            const imageBuffer = Buffer.from(base64Data, 'base64');
+                            const uploadRes = await subirImagenStorage(imageBuffer, 'producto', finalData.categoria);
+                            
+                            if (uploadRes.success) {
+                                finalData.imagenUrl = uploadRes.url;
+                                db.prepare('UPDATE productos SET imagenUrl = ? WHERE id = ?')
+                                  .run(uploadRes.url, finalData.id);
+                            }
+                        }
+                        
+                        // Eliminar campos pesados/obsoletos de Firestore
+                        finalData.imagenLocal = deleteField();
+                        finalData.thumbnailLocal = deleteField();
+                        finalData.thumbnailUrl = deleteField();
+                        
+                        batch.set(docRef, finalData, { merge: true });
+                    } else if (reg.operacion === 'DELETE') {
+                        batch.delete(docRef);
+                    }
+                } else if (reg.entidad === 'usuario') {
+                    const docRef = doc(firestore, 'usuarios', reg.entidad_id);
+                    const usuarioData = { ...data };
+                    
+                    // SEGURIDAD: Nunca enviar contraseñas a Firestore
+                    delete usuarioData.password;
+                    delete usuarioData.password_hash;
+                    delete usuarioData.salt;
+                    
+                    if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
+                        batch.set(docRef, usuarioData, { merge: true });
+                    } else if (reg.operacion === 'DELETE') {
+                        batch.delete(docRef);
+                    }
+                } else if (reg.entidad === 'web_config') {
+                    const docRef = doc(firestore, 'web_config', reg.entidad_id);
+                    batch.set(docRef, data, { merge: true });
+                } else if (reg.entidad === 'banner') {
+                    const docRef = doc(firestore, 'banners', reg.entidad_id);
+                    if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
+                        let finalData = { ...data };
+                        
+                        if (finalData.imagenLocal && (!finalData.imageUrl || finalData.imageUrl === 'PENDIENTE')) {
+                            const base64Data = finalData.imagenLocal.replace(/^data:image\/\w+;base64,/, '');
+                            const imageBuffer = Buffer.from(base64Data, 'base64');
+                            const uploadRes = await subirImagenStorage(imageBuffer, 'banner', 'general');
+                            
+                            if (uploadRes.success) {
+                                finalData.imageUrl = uploadRes.url;
+                                db.prepare('UPDATE banners SET imageUrl = ? WHERE id = ?')
+                                  .run(uploadRes.url, finalData.id);
+                            }
+                        }
+                        
+                        finalData.imagenLocal = deleteField();
+                        
+                        batch.set(docRef, finalData, { merge: true });
+                    } else if (reg.operacion === 'DELETE') {
+                        batch.delete(docRef);
+                    }
+                } else if (reg.entidad === 'lista_compra') {
+                    const docRef = doc(firestore, 'compras_listas', reg.entidad_id);
+                    if (reg.operacion === 'CREATE' || reg.operacion === 'UPDATE') {
+                        batch.set(docRef, data, { merge: true });
+                    } else if (reg.operacion === 'DELETE') {
+                        batch.delete(docRef);
+                    }
+                }
+
+                registrosProcesados.push(reg.id);
+            } catch (e) {
+                console.error('Error procesando registro de sync:', e);
+                db.prepare('UPDATE sync_queue SET intentos = intentos + 1 WHERE id = ?').run(reg.id);
+                ultimoError = e;
+            }
+        }
+
+        if (registrosProcesados.length > 0) {
+            try {
+                await withTimeout(
+                    batch.commit(),
+                    15000,
+                    "Tiempo de espera agotado al enviar datos a Firestore (15s)"
+                );
+                // Marcar como completados
+                const updateStmt = db.prepare('UPDATE sync_queue SET estado_sync = 1 WHERE id = ?');
+                const tx = db.transaction((ids) => {
+                    for (const id of ids) updateStmt.run(id);
+                });
+                tx(registrosProcesados);
+                totalProcesados += registrosProcesados.length;
+                console.log(`Batch sincronizado: ${registrosProcesados.length} registros.`);
+            } catch (error) {
+                console.error('Error al comitear batch a Firestore:', error);
+                const errStmt = db.prepare('UPDATE sync_queue SET intentos = intentos + 1 WHERE id = ?');
+                const txErr = db.transaction((ids) => {
+                    for (const id of ids) errStmt.run(id);
+                });
+                txErr(registrosProcesados);
+                ultimoError = error;
+            }
         }
     }
 
-    if (registrosProcesados.length > 0) {
-        try {
-            await withTimeout(
-                batch.commit(),
-                15000,
-                "Tiempo de espera agotado al enviar datos a Firestore (15s)"
-            );
-            // Marcar como completados
-            const updateStmt = db.prepare('UPDATE sync_queue SET estado_sync = 1 WHERE id = ?');
-            const tx = db.transaction((ids) => {
-                for (const id of ids) updateStmt.run(id);
-            });
-            tx(registrosProcesados);
-            console.log(`Sincronización completada de ${registrosProcesados.length} registros.`);
-            
-            // Emitir evento a todas las ventanas
-            const { BrowserWindow } = require('electron');
-            BrowserWindow.getAllWindows().forEach(win => {
-                if (!win.isDestroyed()) {
-                    win.webContents.send('sync:completado', registrosProcesados.length);
-                }
-            });
-        } catch (error) {
-            console.error('Error al comitear a Firestore:', error);
-            // Incrementar intentos en caso de falla
-            const errStmt = db.prepare('UPDATE sync_queue SET intentos = intentos + 1 WHERE id = ?');
-            const txErr = db.transaction((ids) => {
-                for (const id of ids) errStmt.run(id);
-            });
-            txErr(registrosProcesados);
-
-            // Emitir evento de error
-            const { BrowserWindow } = require('electron');
-            BrowserWindow.getAllWindows().forEach(win => {
-                if (!win.isDestroyed()) {
-                    win.webContents.send('sync:error', error.message);
-                }
-            });
-        }
+    // Emitir evento final al frontend
+    const { BrowserWindow } = require('electron');
+    if (totalProcesados > 0) {
+        BrowserWindow.getAllWindows().forEach(win => {
+            if (!win.isDestroyed()) {
+                win.webContents.send('sync:completado', totalProcesados);
+            }
+        });
+        console.log(`Sincronización total completada: ${totalProcesados} registros.`);
     } else if (ultimoError) {
-        // Si no se procesó nada pero hubo un error en el bucle, notificar al frontend
-        const { BrowserWindow } = require('electron');
         BrowserWindow.getAllWindows().forEach(win => {
             if (!win.isDestroyed()) {
                 win.webContents.send('sync:error', ultimoError.message || 'Error en la cola de sincronización');
@@ -326,31 +346,51 @@ function startSyncWorker() {
     console.log("Worker automático desactivado. Usar sincronización manual.");
 }
 
-async function loginConFirebase(email, password, allowCreate = false) {
+// ====================================================================
+// AUTENTICACIÓN FIREBASE AUTH
+// ====================================================================
+
+// Login principal: Autentica SOLO contra Firebase Auth
+// Es el flujo correcto para la primera instalación y logins normales
+async function loginConFirebase(email, password) {
     try {
-        let loginEmail = email;
-        if (!loginEmail.includes('@')) {
-            // Usamos el ID del proyecto Firebase como dominio para que sea universal
-            const domain = firebaseConfig ? firebaseConfig.projectId : 'pos.local';
-            loginEmail = `${loginEmail}@${domain}.com`;
-        }
-        try {
-            const userCredential = await signInWithEmailAndPassword(auth, loginEmail, password);
-            return { success: true, uid: userCredential.user.uid, email: userCredential.user.email };
-        } catch (err) {
-            // Si las credenciales fallan pero pasamos el login local (allowCreate), el usuario no existe en Firebase o su contraseña se desincronizó
-            if (allowCreate && (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/invalid-login-credentials')) {
-                const userCredential = await createUserWithEmailAndPassword(auth, loginEmail, password);
-                return { success: true, uid: userCredential.user.uid, email: userCredential.user.email, isNew: true };
-            }
-            throw err;
-        }
+        const loginEmail = buildAuthEmail(email);
+        const userCredential = await signInWithEmailAndPassword(auth, loginEmail, password);
+        return { success: true, uid: userCredential.user.uid, email: userCredential.user.email };
     } catch (err) {
         console.error("Error in loginConFirebase:", err);
-        return { success: false, error: err.message, code: err.code };
+        let friendlyError = err.message;
+        if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' || err.code === 'auth/invalid-login-credentials') {
+            friendlyError = 'Contraseña incorrecta';
+        } else if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-email') {
+            friendlyError = 'Usuario no encontrado en Firebase Auth';
+        } else if (err.code === 'auth/too-many-requests') {
+            friendlyError = 'Demasiados intentos. Espera unos minutos antes de reintentar.';
+        } else if (err.code === 'auth/operation-not-allowed') {
+            friendlyError = "Debes habilitar 'Correo electrónico/Contraseña' en la sección Authentication de tu consola Firebase.";
+        }
+        return { success: false, error: friendlyError, code: err.code };
     }
 }
 
+// Crear usuario en Firebase Auth (para nuevos colaboradores)
+async function crearUsuarioAuth(email, password) {
+    if (!firebaseConfig) return { success: false, error: 'Firebase no configurado' };
+    try {
+        const authEmail = buildAuthEmail(email);
+        await createUserWithEmailAndPassword(secondaryAuth, authEmail, password);
+        return { success: true };
+    } catch (authErr) {
+        if (authErr.code === 'auth/email-already-in-use') {
+            return { success: true }; // Ya existe, no es error
+        }
+        return { success: false, error: authErr.message };
+    }
+}
+
+// ====================================================================
+// ANALYTICS
+// ====================================================================
 async function obtenerAnalytics() {
     try {
         const q = query(collection(firestore, 'analytics_events'), orderBy('timestamp', 'desc'), limit(1000));
@@ -366,6 +406,9 @@ async function obtenerAnalytics() {
     }
 }
 
+// ====================================================================
+// SUBIDA DE IMÁGENES A FIREBASE STORAGE
+// ====================================================================
 async function subirImagenStorage(buffer, type, categoria) {
     try {
         const catCode = categoria ? categoria.substring(0, 3).toUpperCase().replace(/[^A-Z]/g, '') : 'GEN';
@@ -383,6 +426,9 @@ async function subirImagenStorage(buffer, type, categoria) {
     }
 }
 
+// ====================================================================
+// DESCARGA COMPLETA DESDE FIREBASE → SQLite
+// ====================================================================
 async function descargarDatosDesdeNube() {
     if (!firestore) return { success: false, error: 'Firebase no está configurado.' };
     try {
@@ -403,7 +449,7 @@ async function descargarDatosDesdeNube() {
         const banners = [];
         bannerSnap.forEach(d => banners.push(d.data()));
 
-        // 4. Descargar Ventas y Detalles en memoria
+        // 4. Descargar Ventas y Detalles
         const ventasList = [];
         const ventasSnap = await getDocs(collection(firestore, 'ventas'));
         
@@ -418,7 +464,6 @@ async function descargarDatosDesdeNube() {
             const ventaId = docSnap.id;
             const detalles = [];
             
-            // Descargar los detalles de cada venta de forma anticipada
             const detallesSnap = await getDocs(collection(firestore, `ventas/${ventaId}/detalle`));
             detallesSnap.forEach(detDoc => {
                 const detData = detDoc.data();
@@ -433,6 +478,7 @@ async function descargarDatosDesdeNube() {
                 detalles
             });
         }
+
         // 5. Descargar Web Config
         const webConfigSnap = await getDocs(collection(firestore, 'web_config'));
         const webConfig = [];
@@ -538,12 +584,12 @@ async function descargarDatosDesdeNube() {
 
                 for (const d of itemVenta.detalles) {
                     insertDetalle.run(
-                        d.id,
+                        d.id || crypto.randomUUID(),
                         ventaId,
-                        d.producto_id,
-                        d.cantidad,
-                        d.precio_unitario,
-                        d.subtotal
+                        d.producto_id || '',
+                        d.cantidad || 1,
+                        d.precio_unitario || 0,
+                        d.subtotal || 0
                     );
                 }
             }
@@ -598,29 +644,6 @@ async function descargarDatosDesdeNube() {
     }
 }
 
-async function crearUsuarioAuth(email, password) {
-    if (!firebaseConfig) return { success: false, error: 'Firebase no configurado' };
-    try {
-        let authEmail = email;
-        if (!authEmail.includes('@')) {
-            const db = require('../database/db.cjs');
-            const conf = db.obtenerWebConfig();
-            let domain = 'minimarket.com';
-            if (conf.success && conf.config && conf.config.emailDomain) {
-                domain = conf.config.emailDomain;
-            }
-            authEmail = `${authEmail}@${domain}`;
-        }
-        await createUserWithEmailAndPassword(secondaryAuth, authEmail, password);
-        return { success: true };
-    } catch (authErr) {
-        if (authErr.code === 'auth/email-already-in-use') {
-            return { success: true }; 
-        }
-        return { success: false, error: authErr.message };
-    }
-}
-
 module.exports = {
     startSyncWorker,
     sincronizarCola,
@@ -631,5 +654,6 @@ module.exports = {
     getFirebaseConfig,
     saveFirebaseConfig,
     descargarDatosDesdeNube,
-    crearUsuarioAuth
+    crearUsuarioAuth,
+    buildAuthEmail
 };

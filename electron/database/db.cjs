@@ -69,25 +69,7 @@ if (currentVersion < migrations.length) {
     console.log('Database migrations completed successfully.');
 }
 
-function crearAdminPorDefecto() {
-    try {
-        const count = db.prepare("SELECT COUNT(*) as count FROM usuarios").get().count;
-        if (count === 0) {
-            const adminId = crypto.randomUUID();
-            const salt = crypto.randomBytes(16).toString('hex');
-            const hash = crypto.scryptSync('admin', salt, 64).toString('hex');
-            
-            db.prepare('INSERT INTO usuarios (id, username, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-                adminId, 'admin', hash, salt, 'admin', JSON.stringify(['all']), 1
-            );
-            console.log('Usuario admin por defecto creado a petición (base de datos limpia).');
-            return true;
-        }
-    } catch (e) {
-        console.error("Error al crear usuario por defecto:", e);
-    }
-    return false;
-}
+
 // --- Funciones CRUD de Productos ---
 
 const stmtBuscarProductoPorCodigo = db.prepare('SELECT * FROM productos WHERE codigoBarras = ?');
@@ -394,7 +376,7 @@ function obtenerVentas(filtros = {}) {
 
 function guardarVenta(ventaParams, detalleVenta) {
     // Usar transacción para asegurar atomicidad
-    const insertVenta = db.prepare('INSERT INTO ventas (id, total, metodoPago, clienteNombre, clienteDocumento) VALUES (@id, @total, @metodoPago, @clienteNombre, @clienteDocumento)');
+    const insertVenta = db.prepare('INSERT INTO ventas (id, fecha, total, metodoPago, clienteNombre, clienteDocumento) VALUES (@id, @fecha, @total, @metodoPago, @clienteNombre, @clienteDocumento)');
     const insertDetalle = db.prepare('INSERT INTO ventas_detalle (id, venta_id, producto_id, cantidad, precio_unitario, subtotal) VALUES (@id, @venta_id, @producto_id, @cantidad, @precio_unitario, @subtotal)');
     const updateStock = db.prepare('UPDATE productos SET stock = stock - @cantidad WHERE id = @producto_id');
     const insertSync = db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (@entidad, @entidad_id, @operacion, @datos_json)');
@@ -414,10 +396,11 @@ function guardarVenta(ventaParams, detalleVenta) {
         }
         finalVentaId = `${serie}-${num.toString().padStart(8, '0')}`;
 
-        const v = { ...vParams, id: finalVentaId };
+        const v = { ...vParams, id: finalVentaId, fecha: new Date().toISOString() };
 
         insertVenta.run({ 
             id: v.id, 
+            fecha: v.fecha,
             total: v.total, 
             metodoPago: v.metodoPago,
             clienteNombre: v.clienteNombre || null,
@@ -465,14 +448,7 @@ function guardarVenta(ventaParams, detalleVenta) {
     }
 }
 
-function obtenerEstadoSync() {
-    try {
-        const count = db.prepare('SELECT COUNT(*) as count FROM sync_queue WHERE estado_sync = 0').get().count;
-        return { success: true, pendingCount: count };
-    } catch (err) {
-        return { success: false, error: err.message };
-    }
-}
+
 
 // --- Funciones de Configuración Web ---
 
@@ -751,7 +727,6 @@ module.exports = {
     guardarListaCompra,
     obtenerListasCompras,
     eliminarListaCompra,
-    crearAdminPorDefecto,
     limpiarUsuariosLocales
 };
 

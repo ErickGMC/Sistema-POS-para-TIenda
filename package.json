@@ -16,7 +16,7 @@
   },
   "build": {
     "appId": "com.minimarketflor.pos",
-    "productName": "Minimarket Flor POS",
+    "productName": "Minimarket POS",
     "directories": {
       "output": "release"
     },

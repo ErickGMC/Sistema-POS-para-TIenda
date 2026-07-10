@@ -442,22 +442,44 @@ async function descargarDatosDesdeNube() {
                 detalles
             });
         }
+        // 5. Descargar Web Config
+        const webConfigSnap = await getDocs(collection(firestore, 'web_config'));
+        const webConfig = [];
+        webConfigSnap.forEach(d => webConfig.push({ key: d.id, value: JSON.stringify(d.data()) }));
+
+        // 6. Descargar Listas de Compras
+        const comprasListasSnap = await getDocs(collection(firestore, 'compras_listas'));
+        const comprasListas = [];
+        comprasListasSnap.forEach(d => comprasListas.push({ id: d.id, data: d.data() }));
 
         console.log("Descarga de red completada con éxito. Escribiendo de forma atómica en SQLite...");
 
-        // 5. Guardar en SQLite en UNA SOLA TRANSACCIÓN ATÓMICA
+        // 7. Guardar en SQLite en UNA SOLA TRANSACCIÓN ATÓMICA
         const stmtInsertProd = db.prepare('INSERT OR REPLACE INTO productos (id, codigoBarras, nombre, descripcion, categoria, precio, costo, stock, unidadMedida, imagenUrl, thumbnailUrl, imagenLocal, thumbnailLocal, disponible, destacado, etiquetas) VALUES (@id, @codigoBarras, @nombre, @descripcion, @categoria, @precio, @costo, @stock, @unidadMedida, @imagenUrl, @thumbnailUrl, @imagenLocal, @thumbnailLocal, @disponible, @destacado, @etiquetas)');
+        const stmtCheckUser = db.prepare('SELECT password_hash, salt FROM usuarios WHERE id = ? OR username = ?');
         const stmtUser = db.prepare('INSERT OR REPLACE INTO usuarios (id, username, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?)');
         const stmtBanner = db.prepare('INSERT OR REPLACE INTO banners (id, title, subtitle, imageUrl, imagenLocal, badgeText, ctaText, ctaActionCategory, active, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         const insertVenta = db.prepare('INSERT OR REPLACE INTO ventas (id, fecha, total, metodoPago, estado, clienteNombre, clienteDocumento) VALUES (?, ?, ?, ?, ?, ?, ?)');
         const insertDetalle = db.prepare('INSERT OR REPLACE INTO ventas_detalle (id, venta_id, producto_id, cantidad, precio_unitario, subtotal) VALUES (?, ?, ?, ?, ?, ?)');
+        
+        const stmtWebConfig = db.prepare('INSERT OR REPLACE INTO web_config (key, value) VALUES (?, ?)');
+        const stmtLista = db.prepare('INSERT OR REPLACE INTO compras_listas (id, nombre, fecha, total_estimado, estado) VALUES (?, ?, ?, ?, ?)');
+        const stmtDetalleLista = db.prepare('INSERT OR REPLACE INTO compras_listas_detalle (id, lista_id, producto_id, cantidad_pedir, costo_unitario) VALUES (?, ?, ?, ?, ?)');
 
         const tx = db.transaction(() => {
-            // A. Registrar Usuarios
+            // A. Registrar Usuarios preservando contraseñas locales si ya existen
             for (const u of usuarios) {
-                const crypto = require('crypto');
-                const salt = crypto.randomBytes(16).toString('hex');
-                const hash = crypto.scryptSync('123456', salt, 64).toString('hex');
+                let hash, salt;
+                const existing = stmtCheckUser.get(u.id || u.username, u.username);
+                
+                if (existing) {
+                    hash = existing.password_hash;
+                    salt = existing.salt;
+                } else {
+                    const crypto = require('crypto');
+                    salt = crypto.randomBytes(16).toString('hex');
+                    hash = crypto.scryptSync('123456', salt, 64).toString('hex');
+                }
                 
                 stmtUser.run(
                     u.id || u.username, 
@@ -532,6 +554,46 @@ async function descargarDatosDesdeNube() {
                         d.precio_unitario,
                         d.subtotal
                     );
+                }
+            }
+
+            // E. Registrar Web Config
+            for (const wc of webConfig) {
+                stmtWebConfig.run(wc.key, wc.value);
+            }
+
+            // F. Registrar Listas de Compra
+            for (const cl of comprasListas) {
+                const l = cl.data;
+                const listaId = cl.id;
+                
+                let fechaSql = new Date().toISOString();
+                if (l.fecha) {
+                    if (l.fecha.seconds) {
+                        fechaSql = new Date(l.fecha.seconds * 1000).toISOString();
+                    } else if (typeof l.fecha === 'string') {
+                        fechaSql = new Date(l.fecha).toISOString();
+                    }
+                }
+                
+                stmtLista.run(
+                    listaId,
+                    l.nombre || 'Lista Importada',
+                    fechaSql,
+                    l.total_estimado || 0,
+                    l.estado || 'pendiente'
+                );
+
+                if (l.detalles && Array.isArray(l.detalles)) {
+                    for (const d of l.detalles) {
+                        stmtDetalleLista.run(
+                            d.id,
+                            listaId,
+                            d.producto_id,
+                            d.cantidad_pedir || d.cantidad || 0,
+                            d.costo_unitario || 0
+                        );
+                    }
                 }
             }
         });

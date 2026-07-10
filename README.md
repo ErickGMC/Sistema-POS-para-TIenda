@@ -21,7 +21,7 @@ Para que **ambos sistemas se comuniquen**, DEBEN estar conectados exactamente al
 Si deseas clonar y usar este ecosistema para tu propio negocio, necesitarás:
 1. **Node.js** (v18 o superior).
 2. Una cuenta en [Firebase Console](https://console.firebase.google.com/).
-3. Crear un proyecto nuevo en Firebase.
+3. Crear un proyecto nuevo en Firebase y **actualizar el proyecto al Plan Blaze (Pago por uso)**. *Nota: Este plan es un requisito de Firebase cuando se utilizan subcolecciones y descargas masivas o almacenamiento intensivo, aunque la cuota gratuita mensual es extremadamente generosa.*
 4. Habilitar **Firestore Database** y **Firebase Storage** en tu proyecto.
 5. Habilitar **Firebase Authentication** (Proveedor de Email/Contraseña).
 
@@ -65,10 +65,10 @@ La aplicación guardará este código localmente en tu computadora de forma segu
 
 ### 4. Ingreso Inicial o Sincronización
 
-- **Si es una instalación nueva (Base de datos vacía):** El sistema creará un usuario administrador local por defecto. 
+- **Si es una instalación en un proyecto nuevo de Firebase:** El sistema detectará que la nube está vacía y te creará un usuario administrador local por defecto al instante. 
   - **Usuario:** `admin`
   - **Contraseña:** `admin`
-- **Si estás instalando en una segunda computadora:** Una vez dentro del sistema (usando el admin por defecto), ve a la barra lateral izquierda y haz clic en el botón **"Descargar Base de Datos"**. Esto copiará todo tu inventario desde Firebase hacia esta computadora.
+- **Si estás instalando en una segunda computadora o restaurante:** El sistema detectará que la nube ya tiene productos. Te llevará al Login y te pedirá las credenciales de tu empleado real (previamente creado). Una vez inicies sesión, el sistema iniciará una **Descarga Automática Masiva** de todo tu inventario, ventas, y configuraciones hacia la PC local sin que tengas que hacer nada.
 
 ---
 

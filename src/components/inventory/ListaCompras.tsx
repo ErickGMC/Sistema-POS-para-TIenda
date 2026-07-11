@@ -21,10 +21,16 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
   // Estado de la Lista Seleccionada
   const [itemsCompra, setItemsCompra] = useState<ItemCompra[]>([]);
   const [mostrarCantidad, setMostrarCantidad] = useState(true);
+  const [notificacion, setNotificacion] = useState<{ texto: string; tipo: 'success' | 'error' | 'info' } | null>(null);
 
   // Estados del Historial y Guardado
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [listasGuardadas, setListasGuardadas] = useState<any[]>([]);
+
+  const mostrarNotificacion = (texto: string, tipo: 'success' | 'error' | 'info' = 'info', duracion = 4000) => {
+    setNotificacion({ texto, tipo });
+    setTimeout(() => setNotificacion(null), duracion);
+  };
 
   // Categorías únicas
   const categories = useMemo(() => {
@@ -89,9 +95,9 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
     });
 
     if (agregados > 0) {
-      alert(`Se agregaron ${agregados} productos con stock crítico (≤ 5) a tu lista de compras.`);
+      mostrarNotificacion(`Se agregaron ${agregados} productos con stock crítico (≤ 5) a tu lista de compras.`, 'success');
     } else {
-      alert('Todos los productos con bajo stock ya están en tu lista.');
+      mostrarNotificacion('Todos los productos con bajo stock ya están en tu lista.', 'info');
     }
   };
 
@@ -130,12 +136,12 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
     try {
       const res = await (window as any).electron.guardarListaCompra(lista, detalles);
       if (res.success) {
-        alert('Lista guardada correctamente. Se sincronizará con la base de datos de Firebase.');
+        mostrarNotificacion('Lista guardada correctamente. Se sincronizará con Firebase.', 'success');
       } else {
-        alert('Error al guardar: ' + res.error);
+        mostrarNotificacion('Error al guardar: ' + (res.error || 'Error desconocido'), 'error');
       }
-    } catch (e) {
-      alert('Error de sistema al guardar la lista');
+    } catch {
+      mostrarNotificacion('Error de sistema al guardar la lista. Intenta nuevamente.', 'error');
     }
   };
 
@@ -335,7 +341,16 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
       <div className="w-1/2 flex flex-col border-r border-slate-700">
         
         {/* Cabecera del Buscador */}
-        <div className="p-4 bg-slate-800 shadow-md z-10 flex flex-col gap-3 border-b border-slate-700">
+        <div className="p-4 bg-slate-800 shadow-md z-10 flex flex-col gap-2.5 border-b border-slate-700">
+          {notificacion && (
+            <div className={`p-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${
+              notificacion.tipo === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
+              notificacion.tipo === 'error' ? 'bg-red-500/10 border-red-500/20 text-red-400' :
+              'bg-blue-500/10 border-blue-500/20 text-blue-400'
+            }`}>
+              <span>{notificacion.texto}</span>
+            </div>
+          )}
           <div className="flex justify-between items-center">
             <h2 className="text-lg font-bold text-slate-200 flex items-center gap-2">
               <PackagePlus className="text-emerald-400" />

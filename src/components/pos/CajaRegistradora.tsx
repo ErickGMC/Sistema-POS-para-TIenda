@@ -7,6 +7,7 @@ export default function CajaRegistradora() {
   const [codigoTerm, setCodigoTerm] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [mensaje, setMensaje] = useState('');
+  const [errorCobro, setErrorCobro] = useState('');
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [cargandoCobro, setCargandoCobro] = useState(false);
@@ -48,7 +49,7 @@ export default function CajaRegistradora() {
           const destacados = results.filter((p: any) => p.destacado);
           setSuggestions(destacados || []);
           setSelectedIndex(0);
-        } catch (err) {
+        } catch {
           setSuggestions([]);
         }
       }
@@ -71,12 +72,31 @@ export default function CajaRegistradora() {
     }
   };
 
+  // Ref para manejar el timeout del mensaje y evitar solapamientos
+  const mensajeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const mostrarMensaje = (msg: string, duracion = 4000) => {
+    setMensaje(msg);
+    if (mensajeTimeoutRef.current) {
+      clearTimeout(mensajeTimeoutRef.current);
+    }
+    mensajeTimeoutRef.current = setTimeout(() => {
+      setMensaje('');
+    }, duracion);
+  };
+
   // Auto-focus en el input principal siempre que sea posible
   useEffect(() => {
     inputRef.current?.focus();
     
     // Atajos de teclado globales
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // No interceptar si el usuario está escribiendo en otro input (ej. WhatsApp, Cliente)
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        // Permitir solo si es nuestro input principal y es un comando especial
+        if (e.target !== inputRef.current) return;
+      }
+
       if (e.key === 'F2') {
         e.preventDefault();
         inputRef.current?.focus();
@@ -120,19 +140,18 @@ export default function CajaRegistradora() {
       
       if (producto) {
         if (producto.stock <= 0) {
-          setMensaje(`Advertencia: ${producto.nombre} no cuenta con stock (Stk: 0).`);
-          setTimeout(() => setMensaje(''), 4000);
+          mostrarMensaje(`Advertencia: ${producto.nombre} no cuenta con stock (Stk: 0).`);
         }
         agregarProducto(producto, cantidad);
         setMensaje('');
         setCodigoTerm('');
         setSuggestions([]);
       } else {
-        setMensaje('Producto no encontrado: ' + term);
+        mostrarMensaje('Producto no encontrado: ' + term);
       }
     } catch (err) {
       console.error(err);
-      setMensaje('Error al buscar producto');
+      mostrarMensaje('Error al buscar producto');
     }
     
     inputRef.current?.focus();
@@ -146,6 +165,7 @@ export default function CajaRegistradora() {
     setMontoRecibido('');
     setVentaCompletada(null);
     setWaPhone('');
+    setErrorCobro('');
     setModalCobroOpen(true);
   };
 
@@ -177,6 +197,7 @@ export default function CajaRegistradora() {
     try {
       const res = await (window as any).electron.guardarVenta(venta, detalle);
       if (res.success) {
+        setErrorCobro('');
         // Formatear datos para WhatsApp
         const ventaObj = {
           id: res.ventaId,
@@ -194,11 +215,11 @@ export default function CajaRegistradora() {
         setVentaCompletada(ventaObj);
         limpiarCarrito();
       } else {
-        alert('Error al guardar venta: ' + res.error);
+        setErrorCobro('Error al guardar la venta: ' + (res.error || 'Error desconocido. Intenta nuevamente.'));
       }
     } catch (err) {
       console.error(err);
-      alert('Error crítico de sistema al procesar venta');
+      setErrorCobro('Error de comunicación con la base de datos. Verifica que el sistema esté funcionando e intenta nuevamente.');
     } finally {
       setCargandoCobro(false);
       inputRef.current?.focus();
@@ -210,7 +231,7 @@ export default function CajaRegistradora() {
 
   const enviarWhatsApp = () => {
     if (!waPhone || waPhone.length < 8) {
-      alert("Por favor ingresa un número de teléfono válido (ej. 51999999999)");
+      setErrorCobro('Ingresa un número de teléfono válido con código de país (ej. 51999999999)');
       return;
     }
 
@@ -221,21 +242,22 @@ export default function CajaRegistradora() {
       });
     };
 
-    let texto = `*SISTEMA POS - TICKET DE VENTA*%0A`;
-    texto += `Ticket ID: ${ventaCompletada.id.toUpperCase()}%0A`;
-    texto += `Fecha: ${formatearFecha(ventaCompletada.fecha)}%0A`;
-    texto += `--------------------------------%0A`;
+    let texto = `*SISTEMA POS - TICKET DE VENTA*\n`;
+    texto += `Ticket ID: ${ventaCompletada.id.toUpperCase()}\n`;
+    texto += `Fecha: ${formatearFecha(ventaCompletada.fecha)}\n`;
+    texto += `--------------------------------\n`;
     
     ventaCompletada.detalles.forEach((d: any) => {
-      texto += `${d.cantidad}x ${d.producto_nombre || 'Producto'}%0A`;
-      texto += `Subtotal: S/ ${d.subtotal.toFixed(2)}%0A`;
+      texto += `${d.cantidad}x ${d.producto_nombre || 'Producto'}\n`;
+      texto += `Subtotal: S/ ${d.subtotal.toFixed(2)}\n`;
     });
     
-    texto += `--------------------------------%0A`;
-    texto += `*TOTAL: S/ ${ventaCompletada.total.toFixed(2)}*%0A`;
+    texto += `--------------------------------\n`;
+    texto += `*TOTAL: S/ ${ventaCompletada.total.toFixed(2)}*\n`;
     texto += `Gracias por tu compra.`;
 
-    (window as any).electron.openExternal(`https://wa.me/${waPhone}?text=${texto}`);
+    const textoCodificado = encodeURIComponent(texto);
+    (window as any).electron.openExternal(`https://wa.me/${waPhone}?text=${textoCodificado}`);
     setModalCobroOpen(false);
     setVentaCompletada(null);
   };
@@ -349,8 +371,8 @@ export default function CajaRegistradora() {
                     }`}
                   >
                     <div className="h-24 w-full bg-slate-900 relative">
-                      {prod.imagenUrl ? (
-                        <img src={prod.imagenUrl} alt={prod.nombre} className="w-full h-full object-contain" />
+                      {(prod.imagenLocal || prod.imagenUrl) ? (
+                        <img src={prod.imagenLocal || prod.imagenUrl} alt={prod.nombre} className="w-full h-full object-contain" />
                       ) : (
                         <div className="w-full h-full flex flex-col items-center justify-center text-slate-600">
                           <ImageIcon size={32} className="mb-2 opacity-50" />
@@ -368,8 +390,8 @@ export default function CajaRegistradora() {
                       </div>
                       <div className="mt-auto pt-2 flex justify-between items-end border-t border-slate-700/50">
                         <div className="flex flex-col">
-                          <span className="text-[10px] text-slate-500 uppercase tracking-wider">Precio</span>
-                          <span className="font-black text-md text-emerald-400">S/ {prod.precio.toFixed(2)}</span>
+                          <span className="text-xs text-slate-500 uppercase tracking-wider">Precio</span>
+                          <span className="font-black text-sm text-emerald-400">S/ {prod.precio.toFixed(2)}</span>
                         </div>
                         <div className={`text-xs font-medium px-2 py-1 rounded bg-slate-900 ${isSelected ? 'text-emerald-400' : 'text-slate-400'}`}>
                           Stk: {prod.stock}
@@ -398,7 +420,7 @@ export default function CajaRegistradora() {
       </div>
 
       {/* Panel Derecho: Ticket de Venta */}
-      <div className="w-[450px] flex-shrink-0 flex flex-col bg-slate-900 shadow-2xl z-10 relative">
+      <div className="w-[380px] min-w-[340px] flex-shrink-0 flex flex-col bg-slate-900 shadow-2xl z-10 relative">
         <div className="p-5 bg-slate-800 border-b border-slate-700 flex items-center justify-between">
           <h2 className="text-xl font-bold flex items-center gap-2">
             <ShoppingCart className="text-emerald-400"/>
@@ -425,7 +447,7 @@ export default function CajaRegistradora() {
               <div key={item.idTicket} className="flex justify-between items-center bg-slate-800 p-3 rounded-lg border border-slate-700/50 hover:border-slate-600 transition">
                 <div className="flex-1 flex gap-3">
                   {item.producto.imagenLocal || item.producto.imagenUrl ? (
-                    <img src={item.producto.imagenUrl} alt={item.producto.nombre} className="w-12 h-12 rounded object-contain bg-slate-900 border border-slate-700/50 flex-shrink-0" />
+                    <img src={item.producto.imagenLocal || item.producto.imagenUrl} alt={item.producto.nombre} className="w-12 h-12 rounded object-contain bg-slate-900 border border-slate-700/50 flex-shrink-0" />
                   ) : (
                     <div className="w-12 h-12 rounded bg-slate-800 flex items-center justify-center text-slate-500 border border-slate-700/50 flex-shrink-0">
                       <ImageIcon size={24} />
@@ -592,6 +614,12 @@ export default function CajaRegistradora() {
                 </div>
 
                 <form onSubmit={confirmarCobro} className="space-y-4">
+                  {errorCobro && (
+                    <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-3 rounded-xl text-xs font-medium flex items-start gap-2">
+                      <span className="shrink-0 mt-0.5">⚠</span>
+                      <span>{errorCobro}</span>
+                    </div>
+                  )}
               
               {/* Selector de Método de Pago */}
               <div>

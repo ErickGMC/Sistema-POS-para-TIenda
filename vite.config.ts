@@ -12,5 +12,16 @@ export default defineConfig({
     watch: {
       ignored: ['**/electron/database/pos.db*']
     }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            return 'vendor';
+          }
+        }
+      }
+    }
   }
 })

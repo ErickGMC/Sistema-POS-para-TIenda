@@ -46,6 +46,15 @@ const migrations = [
     () => {
         db.exec("CREATE TABLE IF NOT EXISTS correlativos (serie TEXT PRIMARY KEY, siguiente_numero INTEGER DEFAULT 1)");
         db.exec("INSERT OR IGNORE INTO correlativos (serie, siguiente_numero) VALUES ('B001', 1)");
+    },
+    // Version 6
+    () => {
+        db.exec(`CREATE TABLE IF NOT EXISTS analytics_events (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            data TEXT
+        )`);
     }
 ];
 
@@ -190,6 +199,12 @@ function actualizarProducto(producto, isFromSync = false) {
 
 function eliminarProducto(id, isFromSync = false) {
     try {
+        // Verificar si el producto tiene ventas asociadas antes de intentar eliminar
+        const ventasCount = db.prepare('SELECT COUNT(*) as count FROM ventas_detalle WHERE producto_id = ?').get(id);
+        if (ventasCount && ventasCount.count > 0) {
+            return { success: false, error: 'TIENE_VENTAS', ventasCount: ventasCount.count };
+        }
+
         const info = db.prepare('DELETE FROM productos WHERE id = ?').run(id);
         
         if (info.changes > 0) {
@@ -701,6 +716,47 @@ function limpiarUsuariosLocales() {
     }
 }
 
+function obtenerDashboardDataLocal(tsInicioObj, strInicio) {
+    try {
+        // 1. Obtener Ventas
+        const ventas = db.prepare('SELECT * FROM ventas WHERE fecha >= ? ORDER BY fecha DESC').all(strInicio);
+        const stmtDetalles = db.prepare(`
+            SELECT d.*, p.nombre as producto_nombre 
+            FROM ventas_detalle d 
+            LEFT JOIN productos p ON d.producto_id = p.id 
+            WHERE d.venta_id = ?
+        `);
+        for (const v of ventas) {
+            v.detalles = stmtDetalles.all(v.id);
+            // Transform date for compat with UI
+            v.fecha = { seconds: Math.floor(new Date(v.fecha).getTime() / 1000) };
+        }
+
+        // 2. Obtener Stock Bajo
+        const stock = db.prepare('SELECT * FROM productos WHERE stock <= 10 ORDER BY stock ASC LIMIT 10').all();
+
+        // 3. Obtener Analytics
+        let analytics = [];
+        try {
+            analytics = db.prepare('SELECT * FROM analytics_events WHERE timestamp >= ? ORDER BY timestamp DESC').all(strInicio);
+            for (const a of analytics) {
+                // Parse data and format timestamp
+                if (a.data) {
+                    try { a.data = JSON.parse(a.data); } catch(e) {}
+                }
+                a.timestamp = { seconds: Math.floor(new Date(a.timestamp).getTime() / 1000) };
+            }
+        } catch (e) {
+            console.error("No se pudo obtener analytics:", e);
+        }
+
+        return { success: true, ventas, stock, analytics };
+    } catch (err) {
+        console.error("Error obteniendo dashboard local:", err);
+        return { success: false, error: err.message };
+    }
+}
+
 module.exports = {
     db,
     buscarProductoPorCodigo,
@@ -727,6 +783,7 @@ module.exports = {
     guardarListaCompra,
     obtenerListasCompras,
     eliminarListaCompra,
-    limpiarUsuariosLocales
+    limpiarUsuariosLocales,
+    obtenerDashboardDataLocal
 };
 

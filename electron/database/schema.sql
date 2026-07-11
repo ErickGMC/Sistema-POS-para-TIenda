@@ -115,3 +115,11 @@ CREATE TABLE IF NOT EXISTS compras_listas_detalle (
     FOREIGN KEY(lista_id) REFERENCES compras_listas(id),
     FOREIGN KEY(producto_id) REFERENCES productos(id)
 );
+
+-- Eventos Analíticos de la Tienda Web
+CREATE TABLE IF NOT EXISTS analytics_events (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    data TEXT
+);

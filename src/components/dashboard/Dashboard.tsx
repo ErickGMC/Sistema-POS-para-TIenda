@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
 import { BarChart3, Users as UsersIcon, MessageCircle, ShoppingBag, DollarSign, TrendingUp, RefreshCw, ShoppingCart, Globe, CreditCard, AlertTriangle, CloudOff, Activity } from 'lucide-react';
-import { getDb } from '../../utils/firebaseClient';
-import { collection, query, where, getDocs, orderBy, limit, Timestamp } from 'firebase/firestore';
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'pos' | 'web'>('pos');
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   
   // Data
@@ -27,11 +26,8 @@ export default function Dashboard() {
   }, []);
 
   const cargarDatos = async () => {
-    if (!isOnline) return;
     setLoading(true);
     try {
-      const db = await getDb();
-      
       // Fechas
       const hoy = new Date();
       let fechaInicio = new Date();
@@ -39,61 +35,34 @@ export default function Dashboard() {
       else if (dateFilter === 'month') fechaInicio.setDate(hoy.getDate() - 30);
       else fechaInicio.setHours(0, 0, 0, 0);
 
-      const tsInicio = Timestamp.fromDate(fechaInicio);
+      const tsInicio = { seconds: Math.floor(fechaInicio.getTime() / 1000), nanoseconds: 0 };
+      const strInicio = fechaInicio.toISOString().replace('T', ' ').substring(0, 19);
 
-      // 1. Cargar Ventas
-      const qVentas = query(
-        collection(db, 'ventas'),
-        where('fecha', '>=', tsInicio),
-        orderBy('fecha', 'desc')
-      );
-      const snapVentas = await getDocs(qVentas);
-      const ventasList = snapVentas.docs.map(d => ({ id: d.id, ...d.data() }));
-      setVentas(ventasList);
-      setVentasRecientes(ventasList.slice(0, 5)); // Ultimas 5 transacciones
-
-      // 2. Cargar Stock Bajo
-      const qStock = query(
-        collection(db, 'productos'),
-        where('stock', '<=', 10),
-        orderBy('stock', 'asc'),
-        limit(10)
-      );
-      const snapStock = await getDocs(qStock);
-      setProductosBajoStock(snapStock.docs.map(d => ({ id: d.id, ...d.data() })));
-
-      // 3. Cargar Analytics
-      const qAnalytics = query(
-        collection(db, 'analytics'),
-        where('timestamp', '>=', tsInicio),
-        orderBy('timestamp', 'desc')
-      );
-      const snapAnalytics = await getDocs(qAnalytics);
-      setAnalyticsData(snapAnalytics.docs.map(d => ({ id: d.id, ...d.data() })));
-
+      const res = await (window as any).electron.obtenerDashboardData(tsInicio, strInicio);
+      
+      if (res.success) {
+        setVentas(res.ventas || []);
+        setVentasRecientes(res.ventas ? res.ventas.slice(0, 5) : []);
+        setProductosBajoStock(res.stock || []);
+        setAnalyticsData(res.analytics || []);
+        setErrorMsg(null);
+      } else {
+        console.error('Error del backend cargando dashboard:', res.error);
+        setErrorMsg(res.error);
+      }
     } catch (err) {
-      console.error('Error cargando dashboard desde Firebase:', err);
+      console.error('Error de comunicación IPC para dashboard:', err);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (isOnline) {
-      cargarDatos();
-    }
+    cargarDatos();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateFilter, isOnline]);
+  }, [dateFilter]);
 
-  if (!isOnline) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center bg-slate-950 text-slate-400">
-        <CloudOff size={64} className="mb-4 text-slate-600" />
-        <h2 className="text-2xl font-bold text-white mb-2">Dashboard Offline</h2>
-        <p>El panel de control requiere conexión a Internet para leer datos de la nube.</p>
-      </div>
-    );
-  }
+
 
   // Cálculos POS
   const totalVentas = ventas.reduce((sum, v) => sum + (v.total || 0), 0);
@@ -121,7 +90,18 @@ export default function Dashboard() {
 
   return (
     <div className="h-full flex flex-col bg-slate-950 text-slate-200 overflow-hidden">
-      <div className="p-6 bg-slate-900 border-b border-slate-800 flex justify-between items-center z-10">
+      {/* Header Fijo */}
+      <div className="flex-none p-5 pb-0">
+        {errorMsg && (
+          <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl flex items-center gap-3">
+            <AlertTriangle size={20} />
+            <div>
+              <p className="font-bold">Error al cargar datos desde la nube:</p>
+              <p className="text-sm">{errorMsg}</p>
+            </div>
+          </div>
+        )}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <h1 className="text-2xl font-bold flex items-center gap-3">
           <BarChart3 className="text-blue-500" /> Cloud Dashboard
           <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full border border-blue-500/30 flex items-center gap-1">
@@ -129,12 +109,24 @@ export default function Dashboard() {
           </span>
         </h1>
         <button 
-          onClick={cargarDatos}
-          disabled={loading}
+          onClick={async () => {
+            setLoading(true);
+            try {
+               await (window as any).electron.forzarSincronizacion();
+               await cargarDatos();
+            } catch(e) {
+               console.error(e);
+            } finally {
+               setLoading(false);
+            }
+          }}
+          disabled={loading || !isOnline}
           className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 px-4 py-2 rounded-lg transition-colors flex items-center gap-2 font-medium"
         >
-          <RefreshCw size={18} className={loading ? 'animate-spin' : ''} /> Actualizar Nube
+          {(!isOnline) ? <CloudOff size={18} /> : <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />} 
+          {(!isOnline) ? 'Offline' : 'Actualizar Nube'}
         </button>
+        </div>
       </div>
 
       <div className="flex flex-col flex-1 overflow-hidden p-6 gap-6 relative">
@@ -228,7 +220,7 @@ export default function Dashboard() {
                            <div className="text-right">
                              <span className="font-black text-emerald-400">S/ {Number(v.total).toFixed(2)}</span>
                              <div className="text-xs text-slate-500">
-                               {new Date(v.fecha?.seconds * 1000 || Date.now()).toLocaleTimeString()}
+                               {new Date(v.fecha?.seconds ? v.fecha.seconds * 1000 : v.fecha || Date.now()).toLocaleTimeString()}
                              </div>
                            </div>
                         </div>

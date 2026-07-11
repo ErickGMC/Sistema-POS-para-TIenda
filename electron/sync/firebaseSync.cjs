@@ -1,6 +1,6 @@
 const { db, limpiarUsuariosLocales } = require('../database/db.cjs');
 const { initializeApp, deleteApp, getApps } = require('firebase/app');
-const { getFirestore, doc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField, setDoc } = require('firebase/firestore');
+const { getFirestore, doc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField } = require('firebase/firestore');
 const { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } = require('firebase/auth');
 const { getStorage, ref, uploadBytes, getDownloadURL } = require('firebase/storage');
 
@@ -74,7 +74,7 @@ async function saveFirebaseConfig(config) {
             console.error("Fallo la validación de Firebase Config:", validationErr);
             
             // Revertir configuración si falla
-            try { fs.unlinkSync(configPath); } catch(e) {}
+            try { fs.unlinkSync(configPath); } catch {}
             firebaseConfig = null;
             
             let userMsg = validationErr.message;
@@ -114,9 +114,9 @@ function initFirebase() {
                 
                 // Si faltan, eliminar todo y reinicializar
                 for (const existingApp of apps) {
-                    try { deleteApp(existingApp); } catch(e) {}
+                    try { deleteApp(existingApp); } catch {}
                 }
-            } catch(e) {}
+            } catch {}
         }
 
         app = initializeApp(firebaseConfig);
@@ -344,9 +344,19 @@ async function sincronizarCola() {
     }
 }
 
-// Función mantenida por compatibilidad pero ya no inicia intervalos
+let syncInterval = null;
+
 function startSyncWorker() {
-    console.log("Worker automático desactivado. Usar sincronización manual.");
+    console.log("Iniciando worker de sincronización automática (cada 5 minutos)...");
+    if (syncInterval) clearInterval(syncInterval);
+    
+    // Ejecutar inmediatamente
+    sincronizarCola().catch(err => console.error("Error en syncWorker inicial:", err));
+    
+    // Programar ejecución cada 5 minutos (300000 ms)
+    syncInterval = setInterval(() => {
+        sincronizarCola().catch(err => console.error("Error en syncWorker periódico:", err));
+    }, 300000);
 }
 
 // ====================================================================
@@ -392,19 +402,39 @@ async function crearUsuarioAuth(email, password) {
 }
 
 // ====================================================================
-// ANALYTICS
+// ANALYTICS & DASHBOARD (NUBE)
 // ====================================================================
-async function obtenerAnalytics() {
+async function obtenerDashboardData(tsInicioObj, strInicio) {
+    if (!firestore) return { success: false, error: 'Firebase no configurado' };
     try {
-        const q = query(collection(firestore, 'analytics_events'), orderBy('timestamp', 'desc'), limit(1000));
-        const snapshot = await getDocs(q);
-        const events = [];
-        snapshot.forEach(doc => {
-            events.push({ id: doc.id, ...doc.data() });
+        const { Timestamp, where } = require('firebase/firestore');
+        const tsInicio = new Timestamp(tsInicioObj.seconds, tsInicioObj.nanoseconds || 0);
+
+        // 1. Cargar Ventas
+        const qVentas = query(collection(firestore, 'ventas'), where('fecha', '>=', strInicio), orderBy('fecha', 'desc'));
+        const snapVentas = await getDocs(qVentas);
+        const ventasList = snapVentas.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // 2. Cargar Stock Bajo
+        const qStock = query(collection(firestore, 'productos'), where('stock', '<=', 10), orderBy('stock', 'asc'), limit(10));
+        const snapStock = await getDocs(qStock);
+        const stockList = snapStock.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // 3. Cargar Analytics
+        const qAnalytics = query(collection(firestore, 'analytics_events'), where('timestamp', '>=', tsInicio), orderBy('timestamp', 'desc'));
+        const snapAnalytics = await getDocs(qAnalytics);
+        
+        const analyticsList = snapAnalytics.docs.map(d => {
+            const data = d.data();
+            if (data.timestamp && data.timestamp.toDate) {
+                data.timestamp = { seconds: data.timestamp.seconds, nanoseconds: data.timestamp.nanoseconds };
+            }
+            return { id: d.id, ...data };
         });
-        return { success: true, events };
+
+        return { success: true, ventas: ventasList, stock: stockList, analytics: analyticsList };
     } catch (err) {
-        console.error("Error obteniendo analytics:", err);
+        console.error("Error obteniendo dashboard data:", err);
         return { success: false, error: err.message };
     }
 }
@@ -492,9 +522,14 @@ async function descargarDatosDesdeNube() {
         const comprasListas = [];
         comprasListasSnap.forEach(d => comprasListas.push({ id: d.id, data: d.data() }));
 
+        // 7. Descargar Analytics Events
+        const analyticsSnap = await getDocs(collection(firestore, 'analytics_events'));
+        const analyticsEvents = [];
+        analyticsSnap.forEach(d => analyticsEvents.push({ id: d.id, data: d.data() }));
+
         console.log("Descarga de red completada con éxito. Escribiendo de forma atómica en SQLite...");
 
-        // 7. Guardar en SQLite en UNA SOLA TRANSACCIÓN ATÓMICA
+        // 8. Guardar en SQLite en UNA SOLA TRANSACCIÓN ATÓMICA
         const stmtInsertProd = db.prepare('INSERT OR REPLACE INTO productos (id, codigoBarras, nombre, descripcion, categoria, precio, costo, stock, unidadMedida, imagenUrl, thumbnailUrl, imagenLocal, thumbnailLocal, disponible, destacado, etiquetas) VALUES (@id, @codigoBarras, @nombre, @descripcion, @categoria, @precio, @costo, @stock, @unidadMedida, @imagenUrl, @thumbnailUrl, @imagenLocal, @thumbnailLocal, @disponible, @destacado, @etiquetas)');
         const stmtCheckUser = db.prepare('SELECT password_hash, salt FROM usuarios WHERE id = ? OR username = ?');
         const stmtUser = db.prepare('INSERT OR REPLACE INTO usuarios (id, username, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?)');
@@ -505,6 +540,7 @@ async function descargarDatosDesdeNube() {
         const stmtWebConfig = db.prepare('INSERT OR REPLACE INTO web_config (key, value) VALUES (?, ?)');
         const stmtLista = db.prepare('INSERT OR REPLACE INTO compras_listas (id, nombre, fecha, total_estimado, estado) VALUES (?, ?, ?, ?, ?)');
         const stmtDetalleLista = db.prepare('INSERT OR REPLACE INTO compras_listas_detalle (id, lista_id, producto_id, cantidad_pedir, costo_unitario) VALUES (?, ?, ?, ?, ?)');
+        const stmtAnalytics = db.prepare('INSERT OR REPLACE INTO analytics_events (id, type, timestamp, data) VALUES (?, ?, ?, ?)');
 
         const tx = db.transaction(() => {
             // A. Registrar Usuarios preservando contraseñas locales si ya existen
@@ -636,6 +672,28 @@ async function descargarDatosDesdeNube() {
                     }
                 }
             }
+
+            // G. Registrar Analytics Events
+            for (const a of analyticsEvents) {
+                const data = a.data;
+                let fechaSql = new Date().toISOString();
+                if (data.timestamp) {
+                    if (data.timestamp.seconds) {
+                        fechaSql = new Date(data.timestamp.seconds * 1000).toISOString();
+                    } else if (typeof data.timestamp === 'string') {
+                        fechaSql = new Date(data.timestamp).toISOString();
+                    }
+                }
+                const extraData = { ...data };
+                delete extraData.timestamp;
+                delete extraData.type;
+                stmtAnalytics.run(
+                    a.id,
+                    data.type || 'unknown',
+                    fechaSql,
+                    Object.keys(extraData).length > 0 ? JSON.stringify(extraData) : null
+                );
+            }
         });
         
         tx();
@@ -652,11 +710,11 @@ module.exports = {
     sincronizarCola,
     get app() { return app; },
     loginConFirebase,
-    obtenerAnalytics,
     subirImagenStorage,
     getFirebaseConfig,
     saveFirebaseConfig,
     descargarDatosDesdeNube,
+    obtenerDashboardData,
     crearUsuarioAuth,
     buildAuthEmail
 };

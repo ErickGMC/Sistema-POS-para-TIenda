@@ -1,27 +1,51 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
-const fs = require('fs');
 const { z } = require('zod');
 const db = require('./database/db.cjs');
 
 // --- Esquemas de Validación (Zod) ---
+// Preprocess helper: convierte strings vacías a 0 para campos numéricos del formulario
+const coerceNum = (defaultVal = 0) => z.preprocess(
+  (val) => (val === '' || val === null || val === undefined) ? defaultVal : Number(val),
+  z.number().min(0)
+);
+const coerceNumNullable = () => z.preprocess(
+  (val) => (val === '' || val === null || val === undefined) ? null : Number(val),
+  z.number().min(0).nullable()
+);
+
+const coerceBool = (defaultVal) => z.preprocess(
+  (val) => {
+    if (val === 1 || val === '1') return true;
+    if (val === 0 || val === '0') return false;
+    return Boolean(val);
+  },
+  z.boolean().default(defaultVal)
+);
+
 const ProductoSchema = z.object({
   id: z.string().uuid().optional().or(z.string()),
-  codigoBarras: z.string().min(1),
+  codigoBarras: z.string().nullable().optional(),
   nombre: z.string().min(1),
-  descripcion: z.string().optional(),
+  descripcion: z.string().nullable().optional(),
   categoria: z.string().min(1),
-  precio: z.number().min(0),
-  costo: z.number().min(0).optional(),
-  stock: z.number().min(0),
+  precio: coerceNum(0),
+  costo: coerceNumNullable(),
+  stock: coerceNum(0),
   unidadMedida: z.string().default('unidad'),
   imagenUrl: z.string().nullable().optional(),
   thumbnailUrl: z.string().nullable().optional(),
   imagenLocal: z.string().nullable().optional(),
   thumbnailLocal: z.string().nullable().optional(),
-  disponible: z.boolean().default(true),
-  destacado: z.boolean().default(false),
-  etiquetas: z.array(z.string()).default([])
+  disponible: coerceBool(true),
+  destacado: coerceBool(false),
+  etiquetas: z.any().transform(val => {
+    if (Array.isArray(val)) return val;
+    if (typeof val === 'string') {
+      try { return JSON.parse(val); } catch { return []; }
+    }
+    return [];
+  }).default([])
 });
 
 const VentaSchema = z.object({
@@ -63,7 +87,6 @@ ipcMain.handle('system:openExternal', async (event, url) => {
 });
 
 const { startSyncWorker } = require('./sync/firebaseSync.cjs');
-const { optimizeImageToWebp } = require('./utils/imageOptimizer.cjs');
 
 // Variables globales para la ventana
 let mainWindow;
@@ -72,6 +95,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
+    minWidth: 1024,
+    minHeight: 600,
     title: 'Minimarket POS Local',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -118,15 +143,11 @@ app.whenReady().then(() => {
     };
 
     // PASO 1: Intentar login contra Firebase Auth (obligatorio si hay internet)
-    let firebaseLoginOk = false;
-    let firebaseUid = null;
-
     try {
       notificar('Verificando credenciales en la nube...');
       const fbRes = await loginConFirebase(username, password);
       
       if (fbRes.success) {
-        firebaseLoginOk = true;
         firebaseUid = fbRes.uid;
       } else {
         // Firebase falló — intentar login local como fallback offline
@@ -153,7 +174,7 @@ app.whenReady().then(() => {
     }
 
     // PASO 2: Firebase Auth exitoso — registrar/actualizar usuario localmente
-    const localUser = db.registrarUsuarioDesdeFirebase(firebaseUid, username, password, 'admin');
+    db.registrarUsuarioDesdeFirebase(firebaseUid, username, password, 'admin');
     
     // PASO 3: Descargar BD completa si la base local está vacía (primera instalación)
     try {
@@ -196,7 +217,7 @@ app.whenReady().then(() => {
   ipcMain.handle('usuarios:obtener', async () => {
     try {
       return db.obtenerUsuarios();
-    } catch (err) {
+    } catch {
       return [];
     }
   });
@@ -284,9 +305,8 @@ app.whenReady().then(() => {
     }
   });
 
-  ipcMain.handle('sync:obtenerAnalytics', async () => {
-    const { obtenerAnalytics } = require('./sync/firebaseSync.cjs');
-    return obtenerAnalytics();
+  ipcMain.handle('sync:obtenerDashboardData', async (event, tsInicioObj, strInicio) => {
+    return db.obtenerDashboardDataLocal(tsInicioObj, strInicio);
   });
 
   app.on('activate', () => {
@@ -306,7 +326,7 @@ app.on('window-all-closed', () => {
 ipcMain.handle('db:buscarProductoPorCodigo', (event, codigo) => {
   try {
     return db.buscarProductoPorCodigo(codigo);
-  } catch (err) {
+  } catch {
     return null;
   }
 });
@@ -314,7 +334,7 @@ ipcMain.handle('db:buscarProductoPorCodigo', (event, codigo) => {
 ipcMain.handle('db:buscarProductosPorNombre', (event, nombre) => {
   try {
     return db.buscarProductosPorNombre(nombre);
-  } catch (err) {
+  } catch {
     return [];
   }
 });
@@ -322,7 +342,7 @@ ipcMain.handle('db:buscarProductosPorNombre', (event, nombre) => {
 ipcMain.handle('db:obtenerTodosProductos', () => {
   try {
     return db.obtenerTodosProductos();
-  } catch (err) {
+  } catch {
     return [];
   }
 });

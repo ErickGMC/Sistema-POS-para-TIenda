@@ -82,6 +82,11 @@ export default function WebAdmin() {
     anuncios: [],
     avisos: []
   });
+  
+  const [originalConfig, setOriginalConfig] = useState<WebConfig | null>(null);
+  const [originalEmpresa, setOriginalEmpresa] = useState<EmpresaConfig | null>(null);
+  const [originalComunidad, setOriginalComunidad] = useState<ComunidadConfig | null>(null);
+
   const [banners, setBanners] = useState<Banner[]>([]);
   const [, setAnalyticsData] = useState<any[]>([]);
   
@@ -99,6 +104,7 @@ export default function WebAdmin() {
     active: true,
     priority: 0
   });
+  const [originalBannerForm, setOriginalBannerForm] = useState<Partial<Banner> | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [mensaje, setMensaje] = useState<{ texto: string; tipo: 'success' | 'error' } | null>(null);
@@ -114,7 +120,7 @@ export default function WebAdmin() {
     try {
       const configRes = await (window as any).electron.obtenerWebConfig();
       if (configRes.success && configRes.config) {
-        setConfig(configRes.config.general || { 
+        const loadedConfig = configRes.config.general || { 
           whatsapp: '', 
           ubicacion: '', 
           mostrarPrecios: false,
@@ -123,21 +129,29 @@ export default function WebAdmin() {
           mapaIframe: '',
           horarioAtencion: '',
           emailContacto: ''
-        });
-        setEmpresa(configRes.config.empresa || {
+        };
+        setConfig(loadedConfig);
+        setOriginalConfig(loadedConfig);
+
+        const loadedEmpresa = configRes.config.empresa || {
           ruc: '',
           razonSocial: '',
           nombreComercial: '',
           direccionFiscal: '',
           telefono: '',
           leyenda: 'Representación impresa de la Boleta de Venta Electrónica'
-        });
-        setComunidad(configRes.config.comunidad || {
+        };
+        setEmpresa(loadedEmpresa);
+        setOriginalEmpresa(loadedEmpresa);
+
+        const loadedComunidad = configRes.config.comunidad || {
           avisoGlobal: '',
           telefonos: [],
           anuncios: [],
           avisos: []
-        });
+        };
+        setComunidad(loadedComunidad);
+        setOriginalComunidad(loadedComunidad);
       }
 
       const bannersRes = await (window as any).electron.obtenerBanners();
@@ -355,8 +369,10 @@ export default function WebAdmin() {
   };
 
   const handleEditBanner = (banner: Banner) => {
-    setIsEditingBanner(true);
     setBannerForm(banner);
+    setOriginalBannerForm(banner);
+    setIsEditingBanner(true);
+    if (fileInputRef.current) fileInputRef.current.value = '';
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -393,8 +409,15 @@ export default function WebAdmin() {
       active: true,
       priority: 0
     });
+    setOriginalBannerForm(null);
+    setIsEditingBanner(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
+
+  const isConfigModified = originalConfig && JSON.stringify(config) !== JSON.stringify(originalConfig);
+  const isEmpresaModified = originalEmpresa && JSON.stringify(empresa) !== JSON.stringify(originalEmpresa);
+  const isComunidadModified = originalComunidad && JSON.stringify(comunidad) !== JSON.stringify(originalComunidad);
+  const isBannerModified = !isEditingBanner || (originalBannerForm && JSON.stringify(bannerForm) !== JSON.stringify(originalBannerForm));
 
   return (
     <div className="flex h-screen bg-slate-900 text-slate-100 font-sans overflow-hidden">
@@ -552,11 +575,15 @@ export default function WebAdmin() {
               </label>
             </div>
 
-            <button
-              disabled={isLoading}
-              type="submit"
-              className="w-full font-bold py-3.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-900 transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed"
-            >
+                <button 
+                  disabled={isLoading || !isConfigModified} 
+                  type="submit" 
+                  className={`w-full font-bold py-3.5 rounded-lg flex items-center justify-center gap-2 transition-all shadow-lg ${
+                    isLoading || !isConfigModified
+                      ? 'bg-slate-700 text-slate-500 cursor-not-allowed border border-slate-700' 
+                      : 'bg-emerald-500 hover:bg-emerald-400 text-slate-900 shadow-emerald-500/20'
+                  }`}
+                >
               {isLoading ? (
                 <>
                   <RefreshCw size={18} className="animate-spin" /> Guardando...
@@ -645,11 +672,15 @@ export default function WebAdmin() {
               />
             </div>
 
-            <button
-              disabled={isLoading}
-              type="submit"
-              className="w-full font-bold py-3.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-900 transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed"
-            >
+                <button 
+                  disabled={isLoading || !isEmpresaModified} 
+                  type="submit" 
+                  className={`w-full font-bold py-3.5 rounded-lg flex items-center justify-center gap-2 transition-all shadow-lg ${
+                    isLoading || !isEmpresaModified
+                      ? 'bg-slate-700 text-slate-500 cursor-not-allowed border border-slate-700' 
+                      : 'bg-emerald-500 hover:bg-emerald-400 text-slate-900 shadow-emerald-500/20'
+                  }`}
+                >
               {isLoading ? (
                 <>
                   <RefreshCw size={18} className="animate-spin" /> Guardando...
@@ -853,11 +884,15 @@ export default function WebAdmin() {
               </div>
             </div>
 
-            <button
-              disabled={isLoading}
-              type="submit"
-              className="w-full font-bold py-3.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-900 transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed"
-            >
+                <button 
+                  disabled={isLoading || !isComunidadModified} 
+                  type="submit" 
+                  className={`w-full font-bold py-3.5 rounded-lg flex items-center justify-center gap-2 transition-all shadow-lg ${
+                    isLoading || !isComunidadModified
+                      ? 'bg-slate-700 text-slate-500 cursor-not-allowed border border-slate-700' 
+                      : 'bg-emerald-500 hover:bg-emerald-400 text-slate-900 shadow-emerald-500/20'
+                  }`}
+                >
               {isLoading ? (
                 <>
                   <RefreshCw size={18} className="animate-spin" /> Guardando...
@@ -994,11 +1029,15 @@ export default function WebAdmin() {
               </label>
             </div>
 
-            <button
-              disabled={isLoading}
-              type="submit"
-              className="w-full font-bold py-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-900 transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed"
-            >
+                <button 
+                  disabled={isLoading || !isBannerModified} 
+                  type="submit" 
+                  className={`w-full font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-all shadow-lg ${
+                    isLoading || !isBannerModified
+                      ? 'bg-slate-700 text-slate-500 cursor-not-allowed border border-slate-700' 
+                      : 'bg-emerald-500 hover:bg-emerald-400 text-slate-900 shadow-emerald-500/20'
+                  }`}
+                >
               {isLoading ? (
                 <>
                   <RefreshCw size={18} className="animate-spin" /> Subiendo...

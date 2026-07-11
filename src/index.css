@@ -21,6 +21,15 @@ body {
   margin: 0;
   overflow: hidden; /* App estilo Kiosko, no scroll global */
   user-select: none; /* Prevenir selección de texto accidental */
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Asegurar que inputs y textareas hereden la fuente */
+input, textarea, select, button {
+  font-family: inherit;
 }
 
 /* 

@@ -12,6 +12,30 @@ const PERMISOS_DISPONIBLES = [
 ];
 
 export default function GestionUsuarios() {
+
+  // Traduce errores crudos del backend a mensajes amigables
+  const traducirError = (error: string): string => {
+    if (!error) return 'Error desconocido';
+    if (error.includes('auth/email-already-in-use') || error.includes('UNIQUE constraint failed: usuarios.username')) {
+      return 'Este nombre de usuario ya está registrado en el sistema. Elige otro.';
+    }
+    if (error.includes('auth/weak-password')) {
+      return 'La contraseña es demasiado débil. Usa al menos 6 caracteres.';
+    }
+    if (error.includes('auth/invalid-email')) {
+      return 'El formato del nombre de usuario no es válido.';
+    }
+    if (error.includes('Datos inválidos')) {
+      return 'Algunos datos del formulario no son válidos. El nombre debe tener al menos 3 caracteres y la contraseña al menos 6.';
+    }
+    if (error.includes('auth/network-request-failed') || error.includes('network') || error.includes('fetch')) {
+      return 'Error de conexión con el servidor. Verifica tu internet e intenta nuevamente.';
+    }
+    if (error.includes('NOT NULL') || error.includes('FOREIGN KEY')) {
+      return 'Error interno de la base de datos. Contacta al administrador del sistema.';
+    }
+    return error;
+  };
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -26,6 +50,7 @@ export default function GestionUsuarios() {
     activo: true
   });
   const [editMode, setEditMode] = useState(false);
+  const [originalForm, setOriginalForm] = useState<any>(null);
   const [mensaje, setMensaje] = useState({ tipo: '', texto: '' });
   const [verContra, setVerContra] = useState(false);
 
@@ -78,7 +103,7 @@ export default function GestionUsuarios() {
           setMensaje({ tipo: 'success', texto: 'Usuario actualizado correctamente' });
           isSuccess = true;
         } else {
-          setMensaje({ tipo: 'error', texto: res.error });
+          setMensaje({ tipo: 'error', texto: traducirError(res.error) });
         }
       } else {
         const res = await (window as any).electron.crearUsuario(payloadUser, form.password);
@@ -86,7 +111,7 @@ export default function GestionUsuarios() {
           setMensaje({ tipo: 'success', texto: 'Usuario creado correctamente' });
           isSuccess = true;
         } else {
-          setMensaje({ tipo: 'error', texto: res.error });
+          setMensaje({ tipo: 'error', texto: traducirError(res.error) });
         }
       }
       
@@ -97,7 +122,7 @@ export default function GestionUsuarios() {
         cargarUsuarios();
       }
     } catch (err: any) {
-      setMensaje({ tipo: 'error', texto: 'Error: ' + err.message });
+      setMensaje({ tipo: 'error', texto: traducirError(err.message || 'Error inesperado') });
     } finally {
       setSubmitting(false);
     }
@@ -110,20 +135,22 @@ export default function GestionUsuarios() {
     if (res.success) {
       cargarUsuarios();
     } else {
-      alert(res.error);
+      setMensaje({ tipo: 'error', texto: traducirError(res.error) });
     }
   };
 
   const editUser = (u: Usuario) => {
     setEditMode(true);
-    setForm({
+    const newForm = {
       id: u.id,
       username: u.username,
       password: '',
       role: u.role,
       permisos: u.permisos || [],
       activo: u.activo !== false
-    });
+    };
+    setForm(newForm);
+    setOriginalForm(newForm);
     setMensaje({ tipo: '', texto: '' });
   };
 
@@ -137,20 +164,25 @@ export default function GestionUsuarios() {
       permisos: [], 
       activo: true 
     });
+    setOriginalForm(null);
   };
 
+  const isModified = !editMode || JSON.stringify(form) !== JSON.stringify(originalForm);
+  const isValid = form.username.length >= 3 && (!editMode ? form.password.length >= 6 : true);
+  const canSubmit = isModified && isValid && !submitting && !successSaved;
+
   return (
-    <div className="h-full w-full bg-slate-950 p-6 flex gap-6 overflow-hidden">
+    <div className="h-full w-full bg-slate-950 p-4 flex gap-4 overflow-hidden">
       
       {/* Lista de Usuarios */}
-      <div className="flex-1 bg-slate-900 border border-slate-800 rounded-3xl p-6 flex flex-col shadow-2xl">
+      <div className="flex-1 bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col shadow-2xl">
         <div className="flex items-center gap-3 mb-6">
           <div className="p-3 bg-blue-500/20 text-blue-400 rounded-xl">
             <Users size={24} />
           </div>
           <div>
-            <h2 className="text-2xl font-bold text-white tracking-tight">Colaboradores</h2>
-            <p className="text-slate-400 text-sm">Gestiona accesos, roles y permisos de tu equipo</p>
+            <h2 className="text-xl font-bold text-white tracking-tight">Colaboradores</h2>
+            <p className="text-slate-400 text-xs">Gestiona accesos, roles y permisos de tu equipo</p>
           </div>
         </div>
 
@@ -247,8 +279,8 @@ export default function GestionUsuarios() {
       </div>
 
       {/* Formulario de Colaborador */}
-      <div className="w-[450px] bg-slate-900 border border-slate-800 rounded-3xl p-6 flex flex-col shadow-2xl overflow-y-auto custom-scrollbar">
-        <h3 className="text-xl font-bold text-white mb-6 border-b border-slate-800 pb-4">
+      <div className="w-[400px] min-w-[350px] max-w-[450px] bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col shadow-2xl overflow-y-auto custom-scrollbar">
+        <h3 className="text-lg font-bold text-white mb-4 border-b border-slate-800 pb-3">
           {editMode ? 'Editar Colaborador' : 'Nuevo Colaborador'}
         </h3>
 
@@ -263,7 +295,7 @@ export default function GestionUsuarios() {
 
         <form onSubmit={handleSubmit} className="flex-1 flex flex-col gap-4">
           <div>
-            <label className="block text-sm text-slate-400 mb-1 ml-1">Nombre de Usuario *</label>
+            <label className="block text-xs font-medium text-slate-400 mb-1 ml-1">Nombre de Usuario *</label>
             <input 
               required 
               type="text" 
@@ -275,30 +307,32 @@ export default function GestionUsuarios() {
           </div>
 
           <div>
-            <label className="block text-sm text-slate-400 mb-1 ml-1">
-              Contraseña {!editMode && '*'} {editMode && <span className="text-[10px] text-slate-500">(En blanco para mantener)</span>}
+            <label className="block text-xs font-medium text-slate-400 mb-1 ml-1">
+              Contraseña {!editMode && '*'} {editMode && <span className="text-xs text-slate-500">(En blanco para mantener)</span>}
             </label>
             <div className="relative">
               <input 
                 required={!editMode}
+                minLength={6}
                 type={verContra ? 'text' : 'password'} 
                 value={form.password} 
                 onChange={e => setForm({...form, password: e.target.value})} 
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 pr-10 text-white focus:border-blue-500 outline-none transition-colors" 
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 pr-10 text-sm text-white focus:border-blue-500 outline-none transition-colors" 
                 placeholder="••••••••"
               />
               <button 
                 type="button" 
                 onClick={() => setVerContra(!verContra)} 
-                className="absolute right-3 top-3.5 text-slate-500 hover:text-slate-350"
+                className="absolute right-3 top-3 text-slate-500 hover:text-slate-350"
               >
-                {verContra ? <EyeOff size={18} /> : <Eye size={18} />}
+                {verContra ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
+            <p className="text-xs text-slate-500 mt-1 ml-1">Mínimo 6 caracteres</p>
           </div>
 
           <div>
-            <label className="block text-sm text-slate-400 mb-1 ml-1">Nivel de Acceso (Rol) *</label>
+            <label className="block text-xs font-medium text-slate-400 mb-1 ml-1">Nivel de Acceso (Rol) *</label>
             <select 
               value={form.role} 
               onChange={e => setForm({...form, role: e.target.value as 'admin'|'colaborador'})} 
@@ -352,13 +386,13 @@ export default function GestionUsuarios() {
 
           <div className="mt-auto pt-6 flex flex-col gap-3">
             <button 
-              disabled={submitting || successSaved}
+              disabled={!canSubmit}
               type="submit" 
               className={`w-full font-bold py-3.5 rounded-xl shadow-lg transition-all duration-300 flex items-center justify-center gap-2 ${
                 successSaved 
                   ? 'bg-emerald-600 text-white shadow-emerald-600/20'
-                  : submitting 
-                    ? 'bg-slate-700 text-slate-400 cursor-not-allowed shadow-none'
+                  : !canSubmit 
+                    ? 'bg-slate-700/50 text-slate-500 cursor-not-allowed shadow-none border border-slate-700'
                     : 'bg-blue-500 hover:bg-blue-400 text-slate-950 shadow-blue-500/20 hover:scale-[1.01] active:scale-[0.99]'
               }`}
             >

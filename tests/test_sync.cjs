@@ -1,5 +1,5 @@
-require('dotenv').config && require('dotenv').config();
-const { app, loginConFirebase, sincronizarCola } = require('./electron/sync/firebaseSync.cjs');
+require('dotenv').config();
+const { loginConFirebase, sincronizarCola } = require('../electron/sync/firebaseSync.cjs');
 
 async function test() {
     console.log("Logging in...");

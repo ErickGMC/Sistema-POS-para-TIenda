@@ -7,6 +7,7 @@
   "scripts": {
     "dev:vite": "vite",
     "dev:electron": "wait-on tcp:5173 && cross-env NODE_ENV=development electron .",
+    "predev": "node electron/clean.cjs",
     "dev": "concurrently -k \"npm run dev:vite\" \"npm run dev:electron\"",
     "build": "tsc -b && vite build",
     "lint": "oxlint",

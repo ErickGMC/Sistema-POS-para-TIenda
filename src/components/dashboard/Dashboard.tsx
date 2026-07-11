@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
+import { useUIStore } from '../../store/useUIStore';
 import { BarChart3, Users as UsersIcon, MessageCircle, ShoppingBag, DollarSign, TrendingUp, RefreshCw, ShoppingCart, Globe, CreditCard, AlertTriangle, CloudOff, Activity } from 'lucide-react';
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'pos' | 'web'>('pos');
   const [loading, setLoading] = useState(false);
+  const { setLoading: setGlobalLoading } = useUIStore();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   
@@ -110,14 +112,14 @@ export default function Dashboard() {
         </h1>
         <button 
           onClick={async () => {
-            setLoading(true);
+            setGlobalLoading(true, "Actualizando métricas desde la nube...");
             try {
                await (window as any).electron.forzarSincronizacion();
                await cargarDatos();
             } catch(e) {
                console.error(e);
             } finally {
-               setLoading(false);
+               setGlobalLoading(false);
             }
           }}
           disabled={loading || !isOnline}

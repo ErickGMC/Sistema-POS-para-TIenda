@@ -8,11 +8,14 @@ import WebAdmin from './components/web/WebAdmin';
 import Dashboard from './components/dashboard/Dashboard';
 import SetupFirebase from './components/auth/SetupFirebase';
 import { useAuthStore } from './store/useAuthStore';
+import { useUIStore } from './store/useUIStore';
+import GlobalLoading from './components/ui/GlobalLoading';
 import { ShoppingCart, Package, Users, LogOut, Cloud, CloudOff, RefreshCw, Check, X, Receipt, Globe, ShieldAlert, BarChart3, CloudDownload } from 'lucide-react';
 
 function App() {
   const [vistaActiva, setVistaActiva] = useState<'pos' | 'ventas' | 'inventario' | 'usuarios' | 'web' | 'dashboard'>('pos');
   const { isAuthenticated, user, logout } = useAuthStore();
+  const { setLoading } = useUIStore();
   const [online, setOnline] = useState(navigator.onLine);
   const [pendingCount, setPendingCount] = useState(0);
   const [toastMessage, setToastMessage] = useState<{msg: string, type: 'success'|'error'} | null>(null);
@@ -31,6 +34,7 @@ function App() {
   const handleManualSync = async () => {
     if (!online || pendingCount === 0 || isSyncing || isDownloading) return;
     setIsSyncing(true);
+    setLoading(true, "Sincronizando con la nube...");
     showToast("Sincronizando con la nube...", 'success');
     try {
       await (window as any).electron.startManualSync();
@@ -38,6 +42,7 @@ function App() {
        showToast("Error al invocar la sincronización manual.", 'error');
     } finally {
        setIsSyncing(false);
+       setLoading(false);
     }
   };
 
@@ -46,17 +51,21 @@ function App() {
     if (!window.confirm("¿Estás seguro de que quieres descargar y sobrescribir los datos locales con los de la nube? Esto es ideal para sincronizar un dispositivo nuevo.")) return;
     
     setIsDownloading(true);
+    setLoading(true, "Descargando base de datos desde la nube...");
     showToast("Descargando base de datos desde la nube...", 'success');
     try {
       const res = await (window as any).electron.descargarDatosDesdeNube();
       if (res.success) {
+        setLoading(true, "Descarga completada exitosamente. Recargando la aplicación...");
         showToast("Descarga completada exitosamente. Recargando la aplicación...", 'success');
         setTimeout(() => window.location.reload(), 2000);
       } else {
         showToast(`Error: ${res.error}`, 'error');
+        setLoading(false);
       }
     } catch {
        showToast("Error al invocar la descarga manual.", 'error');
+       setLoading(false);
     } finally {
        setIsDownloading(false);
     }
@@ -124,15 +133,30 @@ function App() {
   }, [isAuthenticated, user, vistaActiva]);
 
   if (isFirebaseConfigured === null) {
-    return <div className="h-screen w-screen bg-slate-950 flex items-center justify-center text-white">Cargando...</div>;
+    return (
+      <>
+        <GlobalLoading />
+        <div className="h-screen w-screen bg-slate-950 flex items-center justify-center text-white">Cargando...</div>
+      </>
+    );
   }
 
   if (!isFirebaseConfigured) {
-    return <SetupFirebase onSuccess={() => setIsFirebaseConfigured(true)} />;
+    return (
+      <>
+        <GlobalLoading />
+        <SetupFirebase onSuccess={() => setIsFirebaseConfigured(true)} />
+      </>
+    );
   }
 
   if (!isAuthenticated || !user) {
-    return <Login />;
+    return (
+      <>
+        <GlobalLoading />
+        <Login />
+      </>
+    );
   }
 
   const isAdmin = user.role === 'admin';
@@ -155,7 +179,9 @@ function App() {
 
   if (!hasAnyViewPermission) {
     return (
-      <div className="min-h-screen w-screen bg-slate-950 flex flex-col items-center justify-center relative overflow-hidden">
+      <>
+        <GlobalLoading />
+        <div className="min-h-screen w-screen bg-slate-950 flex flex-col items-center justify-center relative overflow-hidden">
         {/* Decoración de fondo */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-amber-500/10 blur-[100px] rounded-full pointer-events-none"></div>
         
@@ -193,11 +219,14 @@ function App() {
           </p>
         </div>
       </div>
+      </>
     );
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-950">
+    <>
+      <GlobalLoading />
+      <div className="flex h-screen w-screen overflow-hidden bg-slate-950">
       
       {/* Sidebar / Tabs */}
       <div className="w-20 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-6 gap-6 z-50 shadow-xl relative">
@@ -375,6 +404,7 @@ function App() {
       )}
 
     </div>
+    </>
   );
 }
 

@@ -1,20 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '../../store/useAuthStore';
+import { useUIStore } from '../../store/useUIStore';
 import { Store, Lock, User, LogIn, CloudDownload } from 'lucide-react';
 
 export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [loadingMsg, setLoadingMsg] = useState('');
   const login = useAuthStore(state => state.login);
+  const { setLoading } = useUIStore();
 
   useEffect(() => {
     // Escuchar mensajes de estado de sincronización del proceso principal
     let unsubscribe: (() => void) | null = null;
     if ((window as any).electron?.onSyncStatus) {
       unsubscribe = (window as any).electron.onSyncStatus((msg: string) => {
-        if (msg) setLoadingMsg(msg);
+        if (msg) setLoading(true, msg);
       });
     }
     return () => {
@@ -44,26 +45,25 @@ export default function Login() {
     e.preventDefault();
     if (!username || !password) return;
     
-    setLoadingMsg('Verificando credenciales...');
+    setLoading(true, 'Verificando credenciales...');
     setError('');
     
     try {
       const result = await (window as any).electron.login(username, password);
       if (result.success) {
-        setLoadingMsg('');
+        setLoading(false);
         login(result.user);
       } else {
         setError(traducirError(result.error || 'Credenciales inválidas'));
-        setLoadingMsg('');
+        setLoading(false);
       }
     } catch (err: any) {
       console.error(err);
       setError(traducirError(err?.message || 'Error de conexión'));
-      setLoadingMsg('');
+      setLoading(false);
     }
   };
 
-  const isDownloading = loadingMsg.toLowerCase().includes('descargando');
 
   return (
     <div className="h-screen w-screen bg-slate-950 flex flex-col items-center justify-center relative overflow-y-auto p-4">
@@ -125,24 +125,10 @@ export default function Login() {
 
             <button
               type="submit"
-              disabled={!!loadingMsg}
               className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-base rounded-xl py-3 mt-3 transition-all duration-300 shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 group disabled:opacity-70 disabled:cursor-wait"
             >
-              {loadingMsg ? (
-                <>
-                  {isDownloading ? (
-                    <CloudDownload size={18} className="animate-bounce" />
-                  ) : (
-                    <LogIn size={18} className="animate-pulse" />
-                  )}
-                  <span className="text-sm">{loadingMsg}</span>
-                </>
-              ) : (
-                <>
-                  <LogIn size={18} className="group-hover:translate-x-1 transition-transform" />
-                  Acceder al Sistema
-                </>
-              )}
+              <LogIn size={18} className="group-hover:translate-x-1 transition-transform" />
+              Acceder al Sistema
             </button>
           </form>
           

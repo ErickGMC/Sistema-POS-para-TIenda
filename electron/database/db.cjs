@@ -407,9 +407,18 @@ function guardarVenta(ventaParams, detalleVenta) {
         let num = 1;
         if (row) {
             num = row.siguiente_numero;
-            updateCorrelativo.run(serie);
         }
-        finalVentaId = `${serie}-${num.toString().padStart(8, '0')}`;
+
+        const checkExist = db.prepare('SELECT id FROM ventas WHERE id = ?');
+        while(true) {
+            finalVentaId = `${serie}-${num.toString().padStart(8, '0')}`;
+            if (!checkExist.get(finalVentaId)) {
+                break;
+            }
+            num++;
+        }
+        
+        db.prepare('UPDATE correlativos SET siguiente_numero = ? WHERE serie = ?').run(num + 1, serie);
 
         const v = { ...vParams, id: finalVentaId, fecha: new Date().toISOString() };
 
@@ -757,6 +766,24 @@ function obtenerDashboardDataLocal(tsInicioObj, strInicio) {
     }
 }
 
+function obtenerAnalyticsLocal() {
+    try {
+        const events = db.prepare('SELECT * FROM analytics_events ORDER BY timestamp DESC LIMIT 100').all();
+        for (const e of events) {
+            if (e.data) {
+                try { e.data = JSON.parse(e.data); } catch(err) {}
+            }
+            e.timestamp = { seconds: Math.floor(new Date(e.timestamp).getTime() / 1000) };
+        }
+        return { success: true, events };
+    } catch (err) {
+        console.error("Error obteniendo analytics local:", err);
+        return { success: false, error: err.message };
+    }
+}
+
+
+
 module.exports = {
     db,
     buscarProductoPorCodigo,
@@ -784,6 +811,7 @@ module.exports = {
     obtenerListasCompras,
     eliminarListaCompra,
     limpiarUsuariosLocales,
-    obtenerDashboardDataLocal
+    obtenerDashboardDataLocal,
+    obtenerAnalyticsLocal
 };
 

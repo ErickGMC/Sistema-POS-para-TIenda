@@ -440,6 +440,42 @@ async function obtenerDashboardData(tsInicioObj, strInicio) {
 }
 
 // ====================================================================
+// DESCARGA ESPECÍFICA DE ANALYTICS
+// ====================================================================
+async function descargarAnalyticsSolo() {
+    if (!firestore) return { success: false, error: 'Firebase no configurado' };
+    try {
+        const { collection, getDocs, query, where } = require('firebase/firestore');
+        const dbLocal = require('../database/db.cjs').db;
+        
+        const tsInicio = new Date();
+        tsInicio.setDate(tsInicio.getDate() - 30); // Últimos 30 días
+
+        const analyticsSnap = await getDocs(query(collection(firestore, 'analytics_events'), where('timestamp', '>=', tsInicio)));
+        
+        const stmtAnalytics = dbLocal.prepare('INSERT OR REPLACE INTO analytics_events (id, type, timestamp, data) VALUES (?, ?, ?, ?)');
+        
+        const insertAll = dbLocal.transaction((docs) => {
+            for (const d of docs) {
+                const a = d.data();
+                let fechaSql = new Date().toISOString();
+                if (a.timestamp) {
+                    if (a.timestamp.toDate) fechaSql = a.timestamp.toDate().toISOString();
+                    else if (a.timestamp.seconds) fechaSql = new Date(a.timestamp.seconds * 1000).toISOString();
+                }
+                stmtAnalytics.run(d.id, a.type || 'pageview', fechaSql, JSON.stringify(a));
+            }
+        });
+        
+        insertAll(analyticsSnap.docs);
+        return { success: true };
+    } catch (err) {
+        console.error("Error descargando analytics:", err);
+        return { success: false, error: err.message };
+    }
+}
+
+// ====================================================================
 // SUBIDA DE IMÁGENES A FIREBASE STORAGE
 // ====================================================================
 async function subirImagenStorage(buffer, type, categoria) {
@@ -716,5 +752,6 @@ module.exports = {
     descargarDatosDesdeNube,
     obtenerDashboardData,
     crearUsuarioAuth,
-    buildAuthEmail
+    buildAuthEmail,
+    descargarAnalyticsSolo
 };

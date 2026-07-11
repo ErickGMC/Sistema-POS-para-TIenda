@@ -291,8 +291,9 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('sync:forzarSincronizacion', async () => {
-    const { sincronizarCola } = require('./sync/firebaseSync.cjs');
+    const { sincronizarCola, descargarAnalyticsSolo } = require('./sync/firebaseSync.cjs');
     await sincronizarCola();
+    await descargarAnalyticsSolo();
     return { success: true };
   });
 
@@ -307,6 +308,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle('sync:obtenerDashboardData', async (event, tsInicioObj, strInicio) => {
     return db.obtenerDashboardDataLocal(tsInicioObj, strInicio);
+  });
+
+  ipcMain.handle('sync:obtenerAnalytics', async () => {
+    return db.obtenerAnalyticsLocal();
   });
 
   app.on('activate', () => {

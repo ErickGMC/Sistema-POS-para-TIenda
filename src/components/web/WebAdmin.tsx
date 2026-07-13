@@ -189,6 +189,7 @@ export default function WebAdmin() {
 
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!(await useUIStore.getState().showConfirm('¿Estás seguro de que deseas actualizar la configuración general de la web?', 'Actualizar Configuración'))) return;
     setIsLoading(true);
     try {
       const res = await (window as any).electron.guardarWebConfig('general', config);
@@ -208,6 +209,7 @@ export default function WebAdmin() {
 
   const handleSaveEmpresa = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!(await useUIStore.getState().showConfirm('¿Estás seguro de que deseas actualizar los datos de la empresa?', 'Actualizar Datos de Empresa'))) return;
     setIsLoading(true);
     try {
       const res = await (window as any).electron.guardarWebConfig('empresa', empresa);
@@ -227,6 +229,7 @@ export default function WebAdmin() {
 
   const handleSaveComunidad = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!(await useUIStore.getState().showConfirm('¿Estás seguro de que deseas actualizar la información de la comunidad?', 'Actualizar Comunidad'))) return;
     setIsLoading(true);
     try {
       const res = await (window as any).electron.guardarWebConfig('comunidad', comunidad);
@@ -258,11 +261,13 @@ export default function WebAdmin() {
     }));
   };
 
-  const handleRemoveTelefono = (id: string) => {
-    setComunidad(prev => ({
-      ...prev,
-      telefonos: prev.telefonos?.filter(t => t.id !== id)
-    }));
+  const handleRemoveTelefono = async (id: string) => {
+    if (await useUIStore.getState().showConfirm('¿Seguro que deseas eliminar este teléfono de la comunidad?', 'Eliminar Teléfono')) {
+      setComunidad(prev => ({
+        ...prev,
+        telefonos: prev.telefonos?.filter(t => t.id !== id)
+      }));
+    }
   };
 
   const handleAddAnuncio = () => {
@@ -279,11 +284,13 @@ export default function WebAdmin() {
     }));
   };
 
-  const handleRemoveAnuncio = (id: string) => {
-    setComunidad(prev => ({
-      ...prev,
-      anuncios: prev.anuncios?.filter(a => a.id !== id)
-    }));
+  const handleRemoveAnuncio = async (id: string) => {
+    if (await useUIStore.getState().showConfirm('¿Seguro que deseas eliminar este anuncio de la comunidad?', 'Eliminar Anuncio')) {
+      setComunidad(prev => ({
+        ...prev,
+        anuncios: prev.anuncios?.filter(a => a.id !== id)
+      }));
+    }
   };
 
   const handleAddAviso = () => {
@@ -303,11 +310,13 @@ export default function WebAdmin() {
     }));
   };
 
-  const handleRemoveAviso = (id: string) => {
-    setComunidad(prev => ({
-      ...prev,
-      avisos: prev.avisos?.filter(a => a.id !== id)
-    }));
+  const handleRemoveAviso = async (id: string) => {
+    if (await useUIStore.getState().showConfirm('¿Seguro que deseas eliminar este aviso de la comunidad?', 'Eliminar Aviso')) {
+      setComunidad(prev => ({
+        ...prev,
+        avisos: prev.avisos?.filter(a => a.id !== id)
+      }));
+    }
   };
 
   const handleBannerImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -344,6 +353,13 @@ export default function WebAdmin() {
       mostrarMensaje('Por favor, selecciona una imagen para el banner.', 'error');
       return;
     }
+
+    const isEditing = !!bannerForm.id;
+    const title = isEditing ? 'Actualizar Banner' : 'Crear Banner';
+    const msg = isEditing 
+      ? '¿Estás seguro de que deseas actualizar este banner?' 
+      : '¿Estás seguro de que deseas crear este nuevo banner?';
+    if (!(await useUIStore.getState().showConfirm(msg, title))) return;
 
     setIsLoading(true);
     try {

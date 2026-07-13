@@ -948,73 +948,92 @@ export default function WebAdmin() {
               )}
             </div>
 
-            <div>
-              <label className="block text-sm text-slate-600 mb-1 font-medium">Título Principal</label>
-              <input
-                type="text"
-                placeholder="Ej: ¡Ofertas de Fin de Semana!"
-                value={bannerForm.title || ''}
-                onChange={e => setBannerForm({ ...bannerForm, title: e.target.value })}
-                className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-lg p-2 text-slate-900 focus:border-emerald-500 outline-none shadow-sm transition-colors"
-              />
-            </div>
+            {/* GRUPO 1: Contenido Textual */}
+            <div className="bg-slate-50 border border-slate-300 rounded-2xl p-4 space-y-4 shadow-sm">
+              <span className="block text-[10px] font-extrabold text-slate-700 uppercase tracking-wider border-l-4 border-emerald-500 pl-2">Contenido Textual</span>
+              <div>
+                <div className="flex justify-between mb-1">
+                  <label className="block text-sm text-slate-600 font-medium">Título Principal</label>
+                  <span className="text-[10px] text-slate-400 font-medium">{(bannerForm.title || '').length}/50</span>
+                </div>
+                <input
+                  type="text"
+                  maxLength={50}
+                  placeholder="Ej: ¡Ofertas de Fin de Semana!"
+                  value={bannerForm.title || ''}
+                  onChange={e => setBannerForm({ ...bannerForm, title: e.target.value })}
+                  className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-lg p-2 text-slate-900 focus:border-emerald-500 outline-none shadow-sm transition-colors"
+                />
+              </div>
 
-            <div>
-              <label className="block text-sm text-slate-600 mb-1">Subtítulo / Mensaje Largo</label>
-              <textarea
-                rows={2}
-                placeholder="Ej: Aprovecha descuentos en abarrotes..."
-                value={bannerForm.subtitle || ''}
-                onChange={e => setBannerForm({ ...bannerForm, subtitle: e.target.value })}
-                className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-lg p-2 text-slate-900 focus:border-emerald-500 outline-none shadow-sm transition-colors custom-scrollbar-light-light-light"
-              />
-            </div>
+              <div>
+                <div className="flex justify-between mb-1">
+                  <label className="block text-sm text-slate-600">Subtítulo / Mensaje Largo</label>
+                  <span className="text-[10px] text-slate-400 font-medium">{(bannerForm.subtitle || '').length}/150</span>
+                </div>
+                <textarea
+                  rows={2}
+                  maxLength={150}
+                  placeholder="Ej: Aprovecha descuentos en abarrotes..."
+                  value={bannerForm.subtitle || ''}
+                  onChange={e => setBannerForm({ ...bannerForm, subtitle: e.target.value })}
+                  className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-lg p-2 text-slate-900 focus:border-emerald-500 outline-none shadow-sm transition-colors custom-scrollbar-light-light-light"
+                />
+              </div>
 
-            <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm text-slate-600 mb-1">Badge / Tag Corto</label>
                 <input
                   type="text"
+                  maxLength={15}
                   placeholder="Ej: Promoción"
                   value={bannerForm.badgeText || ''}
                   onChange={e => setBannerForm({ ...bannerForm, badgeText: e.target.value })}
                   className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-lg p-2 text-slate-900 focus:border-emerald-500 outline-none shadow-sm transition-colors"
                 />
               </div>
-              <div>
-                <label className="block text-sm text-slate-600 mb-1">Texto de Acción (CTA)</label>
-                <input
-                  type="text"
-                  placeholder="Ej: Ver Ofertas"
-                  value={bannerForm.ctaText || ''}
-                  onChange={e => setBannerForm({ ...bannerForm, ctaText: e.target.value })}
-                  className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-lg p-2 text-slate-900 focus:border-emerald-500 outline-none shadow-sm transition-colors"
-                />
-              </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm text-slate-600 mb-1 font-medium">Categoría Destino</label>
-                <select
-                  value={bannerForm.ctaActionCategory || 'Todas'}
-                  onChange={e => setBannerForm({ ...bannerForm, ctaActionCategory: e.target.value })}
-                  className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-lg p-2 text-slate-900 outline-none shadow-sm transition-colors cursor-pointer"
-                >
-                  <option value="Todas">Todas</option>
-                  <option value="Abarrotes">Abarrotes</option>
-                  <option value="Bebidas">Bebidas</option>
-                  <option value="Golosinas">Golosinas</option>
-                  <option value="Verduras">Verduras</option>
-                  <option value="Frutas">Frutas</option>
-                  <option value="Aseo y limpieza">Aseo y limpieza</option>
-                  <option value="Ferreteria y electricidad">Ferreteria y electricidad</option>
-                  <option value="Bazar">Bazar</option>
-                  <option value="Medicina">Medicina</option>
-                  <option value="Libreria">Libreria</option>
-                  <option value="Ocasión y Otros">Ocasión y Otros</option>
-                </select>
+            {/* GRUPO 2: Interactividad */}
+            <div className="bg-slate-50 border border-slate-300 rounded-2xl p-4 space-y-4 shadow-sm">
+              <span className="block text-[10px] font-extrabold text-slate-700 uppercase tracking-wider border-l-4 border-emerald-500 pl-2">Interactividad</span>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-slate-600 mb-1 font-medium">Acción del Botón (Enlace a)</label>
+                  <select
+                    value={bannerForm.ctaActionCategory || 'Todas'}
+                    onChange={e => setBannerForm({ ...bannerForm, ctaActionCategory: e.target.value })}
+                    className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-lg p-2 text-slate-900 outline-none shadow-sm transition-colors cursor-pointer"
+                  >
+                    <option value="Todas">Todas</option>
+                    <option value="Comunidad">🌟 Ir a Comunidad</option>
+                    <option value="Abarrotes">Abarrotes</option>
+                    <option value="Bebidas">Bebidas</option>
+                    <option value="Golosinas">Golosinas</option>
+                    <option value="Verduras">Verduras</option>
+                    <option value="Frutas">Frutas</option>
+                    <option value="Aseo y limpieza">Aseo y limpieza</option>
+                    <option value="Ferreteria y electricidad">Ferreteria y electricidad</option>
+                    <option value="Bazar">Bazar</option>
+                    <option value="Medicina">Medicina</option>
+                    <option value="Libreria">Libreria</option>
+                    <option value="Ocasión y Otros">Ocasión y Otros</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-600 mb-1">Texto de Acción (CTA)</label>
+                  <input
+                    type="text"
+                    maxLength={20}
+                    placeholder="Ej: Ver Ofertas"
+                    value={bannerForm.ctaText || ''}
+                    onChange={e => setBannerForm({ ...bannerForm, ctaText: e.target.value })}
+                    className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-lg p-2 text-slate-900 focus:border-emerald-500 outline-none shadow-sm transition-colors"
+                  />
+                </div>
               </div>
+
               <div>
                 <label className="block text-sm text-slate-600 mb-1 font-medium">Prioridad / Orden</label>
                 <input
@@ -1026,25 +1045,42 @@ export default function WebAdmin() {
               </div>
             </div>
 
-            <div>
+            {/* GRUPO 3: Multimedia */}
+            <div className="bg-slate-50 border border-slate-300 rounded-2xl p-4 shadow-sm">
+              <span className="block text-[10px] font-extrabold text-slate-700 uppercase tracking-wider border-l-4 border-emerald-500 pl-2 mb-3">Multimedia</span>
+              
               <label className="block text-sm text-slate-600 mb-1 font-medium">Imagen del Banner *</label>
               <p className="text-[10px] text-emerald-600/80 mb-2 font-medium">Proporción sugerida: 4:1 (Ej. 1200x300 píxeles).</p>
-              <input
-                type="file"
-                accept="image/*"
-                ref={fileInputRef}
-                onChange={handleBannerImageChange}
-                className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-lg p-1.5 text-slate-600 file:mr-4 file:py-1 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-emerald-500 file:text-white hover:file:bg-emerald-400 transition shadow-sm"
-              />
-              {(bannerForm.imagenLocal || bannerForm.imageUrl) && (
-                <div className="mt-2 flex items-center gap-2 p-1.5 bg-white/60 rounded border border-emerald-500/20">
-                  <img src={bannerForm.imagenLocal || bannerForm.imageUrl || ''} alt="preview" className="w-16 h-8 object-cover rounded" />
-                  <span className="text-[10px] text-emerald-600 truncate flex items-center gap-0.5"><Check size={10} /> Imagen lista para sincronizar</span>
-                </div>
-              )}
+              
+              <div className="relative border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-xl bg-white transition-colors overflow-hidden group">
+                <input
+                  type="file"
+                  accept="image/*"
+                  ref={fileInputRef}
+                  onChange={handleBannerImageChange}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                  title="Haz clic o arrastra una imagen aquí"
+                />
+                
+                {bannerForm.imagenLocal || bannerForm.imageUrl ? (
+                  <div className="relative h-32 w-full flex items-center justify-center bg-slate-100">
+                    <img src={bannerForm.imagenLocal || bannerForm.imageUrl || ''} alt="preview" className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <ImageIcon className="text-white mb-1" size={24} />
+                      <span className="text-white text-xs font-bold">Haz clic para cambiar</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center p-6 text-slate-400 group-hover:text-emerald-500 transition-colors">
+                    <ImageIcon className="mb-2" size={32} />
+                    <span className="text-sm font-semibold">Haz clic o arrastra tu imagen aquí</span>
+                    <span className="text-xs text-slate-400 mt-1">JPG, PNG o WEBP</span>
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="flex items-center gap-4 py-2 border-y border-slate-300 my-4">
+            <div className="flex items-center gap-4 py-2 my-2">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"

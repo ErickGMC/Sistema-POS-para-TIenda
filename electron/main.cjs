@@ -102,6 +102,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
+      webviewTag: true,
     }
   });
 
@@ -114,6 +115,7 @@ function createWindow() {
   }
 
   mainWindow.setMenuBarVisibility(false);
+  mainWindow.maximize();
 }
 
 app.whenReady().then(() => {
@@ -394,6 +396,14 @@ ipcMain.handle('db:guardarVenta', (event, venta, detalle) => {
 ipcMain.handle('db:obtenerVentas', (event, filtros) => {
   try {
     return db.obtenerVentas(filtros);
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('db:anularVenta', (event, id) => {
+  try {
+    return db.anularVenta(id);
   } catch (err) {
     return { success: false, error: err.message };
   }

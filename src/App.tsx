@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import CajaRegistradora from './components/pos/CajaRegistradora';
 import Inventario from './components/inventory/Inventario';
 import GestionUsuarios from './components/users/GestionUsuarios';
@@ -10,7 +10,8 @@ import SetupFirebase from './components/auth/SetupFirebase';
 import { useAuthStore } from './store/useAuthStore';
 import { useUIStore } from './store/useUIStore';
 import GlobalLoading from './components/ui/GlobalLoading';
-import { ShoppingCart, Package, Users, LogOut, Cloud, CloudOff, RefreshCw, Check, X, Receipt, Globe, ShieldAlert, BarChart3, CloudDownload } from 'lucide-react';
+import GlobalDialog from './components/ui/GlobalDialog';
+import { ShoppingCart, Package, Users, LogOut, Cloud, CloudOff, RefreshCw, Check, X, Receipt, Globe, ShieldAlert, BarChart3, CloudDownload, MessageCircle } from 'lucide-react';
 
 function App() {
   const [vistaActiva, setVistaActiva] = useState<'pos' | 'ventas' | 'inventario' | 'usuarios' | 'web' | 'dashboard'>('pos');
@@ -23,13 +24,46 @@ function App() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [isFirebaseConfigured, setIsFirebaseConfigured] = useState<boolean | null>(null);
 
+  // WhatsApp React State
+  const isWhatsAppOpen = useUIStore((state) => state.isWhatsAppOpen);
+  const whatsAppUrl = useUIStore((state) => state.whatsAppUrl);
+  const closeWhatsApp = useUIStore((state) => state.closeWhatsApp);
+  const openWhatsApp = useUIStore((state) => state.openWhatsApp);
+  const isWhatsAppLinked = useUIStore((state) => state.isWhatsAppLinked);
+  const setWhatsAppLinked = useUIStore((state) => state.setWhatsAppLinked);
+
+  const [webviewEnabled] = useState<boolean | null>(
+    typeof window !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron') ? true : null
+  );
+
+  // Callback ref para el webview de Electron para inyectar CSS
+  const webviewRef = useCallback((node: any) => {
+    if (node) {
+      node.removeEventListener('dom-ready', node._domReadyHandler);
+      node._domReadyHandler = () => {
+        if (typeof node.insertCSS === 'function') {
+          node.insertCSS(`
+            body {
+              zoom: 0.75; /* Reduce el tamaño al 75% */
+            }
+          `);
+        }
+      };
+      node.addEventListener('dom-ready', node._domReadyHandler);
+    }
+  }, []);
+
   useEffect(() => {
     const checkConfig = async () => {
       const config = await (window as any).electron.getFirebaseConfig();
+      if (!config && isAuthenticated) {
+        // El entorno fue limpiado (clean.cjs), cerramos sesión en el frontend para forzar el Login
+        logout();
+      }
       setIsFirebaseConfigured(!!config);
     };
     checkConfig();
-  }, []);
+  }, [isAuthenticated, logout]);
 
   const handleManualSync = async () => {
     if (!online || pendingCount === 0 || isSyncing || isDownloading) return;
@@ -48,7 +82,7 @@ function App() {
 
   const handleDownloadCloud = async () => {
     if (!online || isDownloading || isSyncing) return;
-    if (!window.confirm("¿Estás seguro de que quieres descargar y sobrescribir los datos locales con los de la nube? Esto es ideal para sincronizar un dispositivo nuevo.")) return;
+    if (!(await useUIStore.getState().showConfirm("¿Estás seguro de que quieres descargar y sobrescribir los datos locales con los de la nube? Esto es ideal para sincronizar un dispositivo nuevo.", "Descargar de la Nube"))) return;
     
     setIsDownloading(true);
     setLoading(true, "Descargando base de datos desde la nube...");
@@ -136,7 +170,7 @@ function App() {
     return (
       <>
         <GlobalLoading />
-        <div className="h-screen w-screen bg-slate-950 flex items-center justify-center text-white">Cargando...</div>
+        <div className="h-screen w-screen bg-slate-50 flex items-center justify-center text-slate-900">Cargando...</div>
       </>
     );
   }
@@ -181,24 +215,24 @@ function App() {
     return (
       <>
         <GlobalLoading />
-        <div className="min-h-screen w-screen bg-slate-950 flex flex-col items-center justify-center relative overflow-hidden">
+        <div className="min-h-screen w-screen bg-slate-50 flex flex-col items-center justify-center relative overflow-hidden">
         {/* Decoración de fondo */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-amber-500/10 blur-[100px] rounded-full pointer-events-none"></div>
         
         <div className="w-full max-w-md z-10 relative px-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl p-8 backdrop-blur-xl text-center">
+          <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl p-8 backdrop-blur-xl text-center">
             
             <div className="w-20 h-20 bg-gradient-to-tr from-amber-500 to-orange-400 rounded-2xl flex items-center justify-center shadow-lg shadow-amber-500/30 mb-6 mx-auto animate-pulse">
               <ShieldAlert size={40} className="text-slate-950" />
             </div>
             
-            <h1 className="text-2xl font-bold text-white tracking-tight">Acceso Restringido</h1>
-            <p className="text-slate-400 mt-4 text-sm leading-relaxed">
-              Hola, <span className="text-slate-200 font-semibold">{user.username}</span>. Tu cuenta de colaborador actualmente no tiene asignados los permisos necesarios para utilizar la caja registradora, ver el inventario o administrar el sistema.
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Acceso Restringido</h1>
+            <p className="text-slate-600 mt-4 text-sm leading-relaxed">
+              Hola, <span className="text-slate-800 font-semibold">{user.username}</span>. Tu cuenta de colaborador actualmente no tiene asignados los permisos necesarios para utilizar la caja registradora, ver el inventario o administrar el sistema.
             </p>
             
-            <div className="bg-slate-950/60 border border-slate-850 p-4 rounded-xl text-left my-6 text-xs text-slate-500 leading-normal">
-              <p className="font-semibold text-slate-400 mb-1">¿Qué puedes hacer?</p>
+            <div className="bg-slate-50/60 border border-slate-200 p-4 rounded-xl text-left my-6 text-xs text-slate-500 leading-normal">
+              <p className="font-semibold text-slate-600 mb-1">¿Qué puedes hacer?</p>
               <ul className="list-disc pl-4 space-y-1">
                 <li>Solicita a un administrador de la tienda que te asigne permisos desde el panel de control.</li>
                 <li>Si esta no es tu cuenta, cierra la sesión e ingresa con tus credenciales correctas.</li>
@@ -207,7 +241,7 @@ function App() {
 
             <button
               onClick={logout}
-              className="w-full bg-slate-800 hover:bg-slate-700 text-white font-semibold rounded-xl py-3.5 transition-all duration-300 flex items-center justify-center gap-2 border border-slate-700 hover:border-slate-650 cursor-pointer"
+              className="w-full bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 shadow-sm font-semibold rounded-xl py-3.5 transition-all duration-300 flex items-center justify-center gap-2 border border-slate-300 hover:border-slate-400 cursor-pointer"
             >
               <LogOut size={18} />
               Cerrar Sesión
@@ -226,15 +260,15 @@ function App() {
   return (
     <>
       <GlobalLoading />
-      <div className="flex h-screen w-screen overflow-hidden bg-slate-950">
+      <div className="flex h-screen w-screen overflow-hidden bg-slate-50">
       
       {/* Sidebar / Tabs */}
-      <div className="w-20 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-6 gap-6 z-50 shadow-xl relative">
+      <div className="w-20 bg-white border-r border-slate-200 flex flex-col items-center py-6 gap-6 z-50 shadow-xl relative">
         <div className="flex flex-col gap-4 w-full px-3">
           {hasPermission('ventas:cobrar') && (
             <button 
               onClick={() => setVistaActiva('pos')}
-              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'pos' ? 'bg-emerald-500 text-slate-900 scale-105 shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'pos' ? 'bg-emerald-500 text-white scale-105 shadow-lg shadow-emerald-500/20' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
               title="Caja Registradora (POS)"
             >
               <ShoppingCart size={26} strokeWidth={2.5} />
@@ -244,7 +278,7 @@ function App() {
           {hasPermission('ventas:historial') && (
             <button 
               onClick={() => setVistaActiva('ventas')}
-              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'ventas' ? 'bg-indigo-500 text-slate-900 scale-105 shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'ventas' ? 'bg-indigo-500 text-white scale-105 shadow-lg shadow-indigo-500/20' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
               title="Historial de Ventas"
             >
               <Receipt size={26} strokeWidth={2.5} />
@@ -254,7 +288,7 @@ function App() {
           {hasPermission('inventario:modificar') && (
             <button 
               onClick={() => setVistaActiva('inventario')}
-              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'inventario' ? 'bg-blue-500 text-slate-900 scale-105 shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'inventario' ? 'bg-blue-500 text-white scale-105 shadow-lg shadow-blue-500/20' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
               title="Inventario y Catálogo Web"
             >
               <Package size={26} strokeWidth={2.5} />
@@ -264,7 +298,7 @@ function App() {
           {hasPermission('usuarios:gestionar') && (
             <button 
               onClick={() => setVistaActiva('usuarios')}
-              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'usuarios' ? 'bg-purple-500 text-slate-900 scale-105 shadow-lg shadow-purple-500/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'usuarios' ? 'bg-purple-500 text-white scale-105 shadow-lg shadow-purple-500/20' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
               title="Gestión de Usuarios"
             >
               <Users size={26} strokeWidth={2.5} />
@@ -274,7 +308,7 @@ function App() {
           {hasPermission('web:configurar') && (
             <button 
               onClick={() => setVistaActiva('web')}
-              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'web' ? 'bg-teal-500 text-slate-900 scale-105 shadow-lg shadow-teal-500/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'web' ? 'bg-teal-500 text-white scale-105 shadow-lg shadow-teal-500/20' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
               title="Control de Tienda Web"
             >
               <Globe size={26} strokeWidth={2.5} />
@@ -284,12 +318,31 @@ function App() {
           {(hasPermission('ventas:historial') || hasPermission('web:configurar')) && (
             <button 
               onClick={() => setVistaActiva('dashboard')}
-              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'dashboard' ? 'bg-blue-500 text-slate-900 scale-105 shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'dashboard' ? 'bg-blue-500 text-white scale-105 shadow-lg shadow-blue-500/20' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
               title="Dashboard"
             >
               <BarChart3 size={26} strokeWidth={2.5} />
             </button>
           )}
+
+          {/* WhatsApp Web Integrado */}
+          <button 
+            onClick={() => {
+              if (isWhatsAppOpen) {
+                closeWhatsApp();
+              } else {
+                openWhatsApp('', '');
+              }
+            }}
+            className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${
+              isWhatsAppOpen 
+                ? 'bg-emerald-500 text-white scale-105 shadow-lg shadow-emerald-500/20' 
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+            title="WhatsApp Web Integrado"
+          >
+            <MessageCircle size={26} strokeWidth={2.5} />
+          </button>
         </div>
         
         {/* Botón de Sincronización en la Nube */}
@@ -298,11 +351,11 @@ function App() {
             onClick={handleDownloadCloud}
             disabled={!online || isDownloading || isSyncing}
             className={`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 relative group ${
-              !online || isDownloading || isSyncing ? 'cursor-not-allowed opacity-50 bg-slate-800 text-slate-500' : 'cursor-pointer hover:scale-110 shadow-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20'
+              !online || isDownloading || isSyncing ? 'cursor-not-allowed opacity-50 bg-slate-100 text-slate-500' : 'cursor-pointer hover:scale-110 shadow-lg bg-indigo-500/10 text-indigo-600 border border-indigo-500/20 hover:bg-indigo-500/20'
             }`}
           >
-            {isDownloading ? <RefreshCw size={20} className="animate-spin text-indigo-400" /> : <CloudDownload size={20} />}
-            <div className="absolute left-16 bg-slate-900 border border-slate-700 text-slate-100 text-xs px-3 py-1.5 rounded-lg shadow-xl opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-300 whitespace-nowrap z-50">
+            {isDownloading ? <RefreshCw size={20} className="animate-spin text-indigo-600" /> : <CloudDownload size={20} />}
+            <div className="absolute left-16 bg-slate-100 border border-slate-300 text-slate-900 text-xs px-3 py-1.5 rounded-lg shadow-xl opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-300 whitespace-nowrap z-50">
               <span className="flex items-center gap-1.5">Descargar Base de Datos</span>
             </div>
           </button>
@@ -316,10 +369,10 @@ function App() {
               !online 
                 ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20' 
                 : isSyncing 
-                  ? 'bg-blue-500/20 text-blue-400 border border-blue-500/40 shadow-blue-500/30'
+                  ? 'bg-blue-500/20 text-blue-600 border border-blue-500/40 shadow-blue-500/30'
                   : pendingCount > 0 
-                    ? 'bg-amber-500/10 text-amber-500 border border-amber-500/40 hover:bg-amber-500/20 shadow-amber-500/20' 
-                    : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    ? 'bg-amber-500/10 text-amber-600 border border-amber-500/40 hover:bg-amber-500/20 shadow-amber-500/20' 
+                    : 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
             }`}
             title={
               !online 
@@ -334,15 +387,15 @@ function App() {
             {!online ? (
               <CloudOff size={20} />
             ) : isSyncing ? (
-              <RefreshCw size={20} className="animate-spin text-blue-400" />
+              <RefreshCw size={20} className="animate-spin text-blue-600" />
             ) : pendingCount > 0 ? (
-              <Cloud size={20} className="text-amber-500 animate-pulse" />
+              <Cloud size={20} className="text-amber-600 animate-pulse" />
             ) : (
               <Cloud size={20} />
             )}
             
             {/* Tooltip personalizado */}
-            <div className="absolute left-16 bg-slate-900 border border-slate-700 text-slate-100 text-xs px-3 py-1.5 rounded-lg shadow-xl opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-300 whitespace-nowrap z-50">
+            <div className="absolute left-16 bg-slate-100 border border-slate-300 text-slate-900 text-xs px-3 py-1.5 rounded-lg shadow-xl opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-300 whitespace-nowrap z-50">
               {!online ? (
                 <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-rose-500"></span> Offline: Solo datos locales</span>
               ) : isSyncing ? (
@@ -367,29 +420,162 @@ function App() {
       </div>
 
       {/* Contenido Principal */}
-      <div className="flex-1 overflow-hidden relative">
-        <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'pos' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-          {vistaActiva === 'pos' && hasPermission('ventas:cobrar') && <CajaRegistradora />}
+      <div className="flex-1 overflow-hidden relative flex">
+        {/* Vistas Activas */}
+        <div className="flex-1 h-full overflow-hidden relative">
+          <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'pos' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+            {vistaActiva === 'pos' && hasPermission('ventas:cobrar') && <CajaRegistradora />}
+          </div>
+
+          <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'ventas' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+            {vistaActiva === 'ventas' && hasPermission('ventas:historial') && <HistorialVentas />}
+          </div>
+          
+          <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'inventario' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+            {vistaActiva === 'inventario' && hasPermission('inventario:modificar') && <Inventario />}
+          </div>
+          
+          <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'usuarios' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+            {vistaActiva === 'usuarios' && hasPermission('usuarios:gestionar') && <GestionUsuarios />}
+          </div>
+          
+          <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'web' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+            {vistaActiva === 'web' && hasPermission('web:configurar') && <WebAdmin />}
+          </div>
+
+          <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'dashboard' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+            {vistaActiva === 'dashboard' && (hasPermission('ventas:historial') || hasPermission('web:configurar')) && <Dashboard />}
+          </div>
         </div>
 
-        <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'ventas' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-          {vistaActiva === 'ventas' && hasPermission('ventas:historial') && <HistorialVentas />}
-        </div>
-        
-        <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'inventario' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-          {vistaActiva === 'inventario' && hasPermission('inventario:modificar') && <Inventario />}
-        </div>
-        
-        <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'usuarios' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-          {vistaActiva === 'usuarios' && hasPermission('usuarios:gestionar') && <GestionUsuarios />}
-        </div>
-        
-        <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'web' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-          {vistaActiva === 'web' && hasPermission('web:configurar') && <WebAdmin />}
-        </div>
+        {/* WhatsApp Panel Lateral */}
+        <div className={`h-full border-l border-slate-300 bg-white flex flex-col z-40 shadow-2xl transition-all duration-300 overflow-hidden ${
+          isWhatsAppOpen ? 'w-[520px] opacity-100' : 'w-0 opacity-0 pointer-events-none border-l-0'
+        }`}>
+          {/* Header del Panel */}
+          <div className="p-4 border-b border-slate-350 flex justify-between items-center bg-slate-50 shrink-0">
+            <span className="font-bold text-slate-800 flex items-center gap-2 text-xs uppercase tracking-wider">
+              <span className={`w-2 h-2 rounded-full ${isWhatsAppLinked ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`}></span>
+              WhatsApp Web Integrado
+            </span>
+            <button 
+              onClick={closeWhatsApp} 
+              className="p-1.5 hover:bg-slate-200 hover:text-slate-900 text-slate-600 rounded-lg transition cursor-pointer"
+              title="Cerrar WhatsApp"
+            >
+              <X size={18} />
+            </button>
+          </div>
 
-        <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'dashboard' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-          {vistaActiva === 'dashboard' && (hasPermission('ventas:historial') || hasPermission('web:configurar')) && <Dashboard />}
+          {/* Guías de Onboarding e Indicadores de Conexión */}
+          {isWhatsAppOpen && (
+            !isWhatsAppLinked ? (
+              <div className="bg-amber-50/80 px-4 py-3 border-b border-amber-200 flex flex-col gap-2 shrink-0">
+                <div className="flex items-center gap-2 text-[10px] font-extrabold text-amber-800 uppercase tracking-wide">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+                  ⚠️ Dispositivo No Vinculado
+                </div>
+                <p className="text-[11px] text-slate-650 leading-relaxed">
+                  Escanea el código QR que se muestra abajo en la sección de dispositivos vinculados de tu celular. Una vez veas tus chats, confirma la conexión aquí abajo.
+                </p>
+                <button 
+                  onClick={() => {
+                    setWhatsAppLinked(true);
+                    showToast("¡WhatsApp Web conectado y listo para usar!", 'success');
+                  }}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase py-2.5 px-3 rounded-xl transition shadow-md shadow-emerald-500/10 w-full flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Check size={14} strokeWidth={3} /> Confirmar Conexión (QR Escaneado)
+                </button>
+              </div>
+            ) : (
+              <div className="bg-emerald-50/80 px-4 py-2.5 border-b border-emerald-250 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-1.5 text-[10px] font-extrabold text-emerald-800 uppercase tracking-wide">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                  ✅ Conexión Activa
+                </div>
+                <button 
+                  onClick={async () => {
+                    const confirm = await useUIStore.getState().showConfirm(
+                      "¿Estás seguro de que deseas desvincular tu WhatsApp? Deberás escanear el QR nuevamente para enviar tickets.",
+                      "Desvincular WhatsApp"
+                    );
+                    if (confirm) {
+                      setWhatsAppLinked(false);
+                      openWhatsApp('', ''); // Reload to homepage
+                      showToast("WhatsApp desvinculado correctamente.", 'error');
+                    }
+                  }}
+                  className="text-[9px] text-rose-700 bg-rose-50 border border-rose-200 hover:bg-rose-100 hover:text-rose-800 px-2 py-1 rounded-lg font-bold transition uppercase cursor-pointer"
+                >
+                  Desvincular Cuenta
+                </button>
+              </div>
+            )
+          )}
+          
+          {/* Contenedor del Webview / Fallback */}
+          <div className="flex-1 bg-slate-100 relative">
+            {typeof window !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron') ? (
+              webviewEnabled === false ? (
+                <div className="h-full flex flex-col items-center justify-center p-6 text-center text-slate-700 bg-slate-50">
+                  <div className="w-14 h-14 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mb-4 animate-pulse shadow-sm border border-amber-200">
+                    <ShieldAlert size={28} />
+                  </div>
+                  <h4 className="font-bold text-slate-900 mb-2 text-sm uppercase">Reinicio Requerido</h4>
+                  <p className="text-xs text-slate-650 mb-6 leading-relaxed max-w-sm">
+                    Hemos configurado los permisos de WhatsApp en el sistema. Para activarlos, por favor <strong>cierra la aplicación de escritorio por completo y vuélvela a abrir</strong>.
+                  </p>
+                  <button
+                    onClick={() => window.location.reload()}
+                    className="bg-white border border-slate-300 hover:border-slate-400 hover:bg-slate-50 shadow-sm text-slate-800 font-bold text-xs uppercase px-5 py-3 rounded-xl transition cursor-pointer"
+                  >
+                    Recargar Ventana
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {webviewEnabled === null && (
+                    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-50 text-slate-550">
+                      <RefreshCw size={28} className="animate-spin text-emerald-600 mb-2" />
+                      <span className="text-[11px] font-medium">Cargando entorno...</span>
+                    </div>
+                  )}
+                  {(() => {
+                    const WebviewTag = 'webview' as any;
+                    return (
+                      <WebviewTag
+                        ref={webviewRef}
+                        src={whatsAppUrl}
+                        useragent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                        partition="persist:whatsapp"
+                        allowpopups="true"
+                        style={{ width: '100%', height: '100%', border: 'none', opacity: webviewEnabled === true ? 1 : 0 }}
+                      />
+                    );
+                  })()}
+                </>
+              )
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center p-6 text-center text-slate-700 bg-slate-50">
+                <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mb-4">
+                  <Globe size={28} />
+                </div>
+                <h4 className="font-bold text-slate-900 mb-2">WhatsApp Web en el Navegador</h4>
+                <p className="text-xs text-slate-650 mb-6 leading-relaxed max-w-sm">
+                  El entorno integrado de WhatsApp Web utiliza etiquetas de escritorio (Electron) para incrustarse de forma segura sin salir de la app.
+                </p>
+                <a
+                  href={whatsAppUrl ? whatsAppUrl.replace('web.whatsapp.com/send', 'api.whatsapp.com/send') : 'https://api.whatsapp.com/'}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="bg-emerald-600 hover:bg-emerald-555 text-white font-bold text-xs uppercase px-5 py-3 rounded-xl transition shadow-lg shadow-emerald-500/20 cursor-pointer"
+                >
+                  Abrir en Nueva Pestaña
+                </a>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -402,6 +588,9 @@ function App() {
           <span className="font-medium text-sm">{toastMessage.msg}</span>
         </div>
       )}
+
+      {/* Global Dialogs */}
+      <GlobalDialog />
 
     </div>
     </>

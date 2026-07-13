@@ -1,4 +1,5 @@
 import type { EmpresaConfig } from "../components/web/WebAdmin";
+import { useUIStore } from '../store/useUIStore';
 
 export interface TicketVenta {
   id: string;
@@ -194,10 +195,10 @@ export async function imprimirTicket(
     const res = await (window as any).electron.imprimirSilencioso(html);
     if (!res.success) {
       console.error("Error al imprimir silenciosamente:", res.error);
-      alert("Error en la impresora. Revisa la conexión de la impresora predeterminada.");
+      await useUIStore.getState().showAlert("Error en la impresora. Revisa la conexión de la impresora predeterminada.", "Error de Impresión");
     }
   } catch (err) {
     console.error("Error de IPC al imprimir:", err);
-    alert("No se pudo conectar con el sistema de impresión.");
+    await useUIStore.getState().showAlert("No se pudo conectar con el sistema de impresión.", "Error de Conexión");
   }
 }

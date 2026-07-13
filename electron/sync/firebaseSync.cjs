@@ -500,6 +500,14 @@ async function subirImagenStorage(buffer, type, categoria) {
 // ====================================================================
 async function descargarDatosDesdeNube() {
     if (!firestore) return { success: false, error: 'Firebase no está configurado.' };
+    
+    // Validar autenticación antes de intentar descargar datos protegidos (como ventas)
+    if (!auth || !auth.currentUser) {
+        return { 
+            success: false, 
+            error: 'Sesión en la nube no activa. Por seguridad, por favor cierra sesión en la aplicación (menú usuario) y vuelve a ingresar con tu contraseña para descargar la base de datos.' 
+        };
+    }
     try {
         console.log("Descargando base de datos completa desde Firebase...");
         

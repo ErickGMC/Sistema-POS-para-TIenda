@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import type { Producto } from '../../store/usePosStore';
 import { Search, FileText, MessageCircle, AlertTriangle, Plus, Trash2, ListPlus, Calculator, PackagePlus, Save, History, X } from 'lucide-react';
+import { useUIStore } from '../../store/useUIStore';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -20,7 +21,7 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
   
   // Estado de la Lista Seleccionada
   const [itemsCompra, setItemsCompra] = useState<ItemCompra[]>([]);
-  const [mostrarCantidad, setMostrarCantidad] = useState(true);
+  const [mostrarCantidad, setMostrarCantidad] = useState(false);
   const [notificacion, setNotificacion] = useState<{ texto: string; tipo: 'success' | 'error' | 'info' } | null>(null);
 
   // Estados del Historial y Guardado
@@ -73,8 +74,8 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
     ));
   };
 
-  const vaciarLista = () => {
-    if (confirm('¿Estás seguro de vaciar la lista de compras actual?')) {
+  const vaciarLista = async () => {
+    if (await useUIStore.getState().showConfirm('¿Estás seguro de vaciar la lista de compras actual?', 'Vaciar Lista')) {
       setItemsCompra([]);
     }
   };
@@ -146,15 +147,15 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
   };
 
   const eliminarListaGuardada = async (id: string) => {
-    if (confirm('¿Seguro que deseas eliminar esta lista guardada?')) {
+    if (await useUIStore.getState().showConfirm('¿Seguro que deseas eliminar esta lista guardada?', 'Eliminar Lista')) {
       await (window as any).electron.eliminarListaCompra(id);
       cargarHistorial();
     }
   };
 
-  const cargarListaEnEditor = (listaGuardada: any) => {
+  const cargarListaEnEditor = async (listaGuardada: any) => {
     if (itemsCompra.length > 0) {
-      if (!confirm('Tu lista actual se reemplazará por la guardada. ¿Deseas continuar?')) return;
+      if (!(await useUIStore.getState().showConfirm('Tu lista actual se reemplazará por la guardada. ¿Deseas continuar?', 'Cargar Lista'))) return;
     }
     
     const itemsRestaurados: ItemCompra[] = [];
@@ -193,7 +194,19 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
   }, [itemsCompra]);
 
   // Exportación
-  const generateWhatsAppMessage = () => {
+  const generateWhatsAppMessage = async () => {
+    const isWhatsAppLinked = useUIStore.getState().isWhatsAppLinked;
+    if (!isWhatsAppLinked) {
+      const confirm = await useUIStore.getState().showConfirm(
+        "No has vinculado tu cuenta de WhatsApp Web en este dispositivo. ¿Deseas abrir el panel lateral para escanear el código QR ahora?",
+        "WhatsApp No Vinculado"
+      );
+      if (confirm) {
+        useUIStore.getState().openWhatsApp('', '');
+      }
+      return;
+    }
+
     let message = "🛒 *ORDEN DE COMPRA - MINIMARKET FLOR*\n\n";
     
     Object.keys(itemsPorCategoria).sort().forEach(cat => {
@@ -207,12 +220,7 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
       message += `\n`;
     });
 
-    const url = `https://wa.me/?text=${encodeURIComponent(message)}`;
-    if ((window as any).electron && (window as any).electron.openExternal) {
-      (window as any).electron.openExternal(url);
-    } else {
-      window.open(url, '_blank');
-    }
+    useUIStore.getState().openWhatsApp('', message);
   };
 
   const generatePDF = () => {
@@ -287,23 +295,23 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
   };
 
   return (
-    <div className="h-full flex flex-row bg-slate-900 overflow-hidden relative">
+    <div className="h-full flex flex-row bg-white overflow-hidden relative">
       
       {/* MODAL DEL HISTORIAL */}
       {showHistoryModal && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
-          <div className="bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col overflow-hidden">
-            <div className="p-5 border-b border-slate-700 flex justify-between items-center bg-slate-800/80">
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-50/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-100 border border-slate-300 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="p-5 border-b border-slate-300 flex justify-between items-center bg-slate-100/80">
               <h2 className="text-xl font-bold flex items-center gap-2">
-                <History className="text-emerald-400" />
+                <History className="text-emerald-600" />
                 Historial de Listas Guardadas
               </h2>
-              <button onClick={() => setShowHistoryModal(false)} className="text-slate-400 hover:text-white p-1 rounded transition">
+              <button onClick={() => setShowHistoryModal(false)} className="text-slate-600 hover:text-slate-900 p-1 rounded transition">
                 <X size={24} />
               </button>
             </div>
             
-            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar-light-light-light">
               {listasGuardadas.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-slate-500 italic">
                   No tienes listas guardadas en el historial.
@@ -311,21 +319,28 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
               ) : (
                 <div className="grid gap-3">
                   {listasGuardadas.map(lista => (
-                    <div key={lista.id} className="bg-slate-900 border border-slate-700 rounded-xl p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                    <div key={lista.id} className="bg-white border border-slate-200 hover:border-slate-300 rounded-xl p-3 flex flex-col sm:flex-row justify-between sm:items-center gap-3 transition shadow-sm">
                       <div>
-                        <div className="font-bold text-lg text-slate-200">{lista.nombre}</div>
-                        <div className="text-sm text-slate-400 flex items-center gap-3 mt-1">
+                        <div className="font-bold text-base text-slate-800">{lista.nombre}</div>
+                        <div className="text-xs text-slate-500 flex items-center gap-3 mt-1 font-medium">
                           <span>{new Date(lista.fecha).toLocaleDateString()} {new Date(lista.fecha).toLocaleTimeString()}</span>
-                          <span className="bg-slate-800 px-2 py-0.5 rounded-full text-xs border border-slate-700">{lista.detalles.length} productos</span>
+                          <span className="bg-slate-50 px-2 py-0.5 rounded-full text-[11px] border border-slate-200 text-slate-600">{lista.detalles.length} productos</span>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-amber-400 mr-2 text-lg">S/ {lista.total_estimado.toFixed(2)}</span>
-                        <button onClick={() => cargarListaEnEditor(lista)} className="bg-blue-600/20 text-blue-400 hover:bg-blue-600 hover:text-white px-4 py-2 rounded-lg font-semibold transition border border-blue-500/30">
+                      <div className="flex items-center gap-2.5">
+                        <span className="font-bold text-amber-600 mr-1 text-base">S/ {lista.total_estimado.toFixed(2)}</span>
+                        <button 
+                          onClick={() => cargarListaEnEditor(lista)} 
+                          className="bg-blue-50 hover:bg-blue-100 hover:text-blue-700 text-blue-600 px-3.5 py-1.5 rounded-lg font-bold text-xs transition border border-blue-200 cursor-pointer shadow-sm"
+                        >
                           Cargar
                         </button>
-                        <button onClick={() => eliminarListaGuardada(lista.id)} className="bg-rose-600/10 text-rose-400 hover:bg-rose-600 hover:text-white p-2 rounded-lg transition border border-rose-500/20">
-                          <Trash2 size={20} />
+                        <button 
+                          onClick={() => eliminarListaGuardada(lista.id)} 
+                          className="bg-rose-50 hover:bg-rose-100 hover:text-rose-700 text-rose-600 p-1.5 rounded-lg transition border border-rose-200 cursor-pointer shadow-sm"
+                          title="Eliminar del historial"
+                        >
+                          <Trash2 size={16} />
                         </button>
                       </div>
                     </div>
@@ -338,34 +353,34 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
       )}
 
       {/* PANEL IZQUIERDO: CATÁLOGO Y BUSCADOR */}
-      <div className="w-1/2 flex flex-col border-r border-slate-700">
+      <div className="w-1/2 flex flex-col border-r border-slate-300">
         
         {/* Cabecera del Buscador */}
-        <div className="p-4 bg-slate-800 shadow-md z-10 flex flex-col gap-2.5 border-b border-slate-700">
+        <div className="p-4 bg-slate-100 shadow-md z-10 flex flex-col gap-2.5 border-b border-slate-300">
           {notificacion && (
             <div className={`p-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${
-              notificacion.tipo === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
+              notificacion.tipo === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600' :
               notificacion.tipo === 'error' ? 'bg-red-500/10 border-red-500/20 text-red-400' :
-              'bg-blue-500/10 border-blue-500/20 text-blue-400'
+              'bg-blue-500/10 border-blue-500/20 text-blue-600'
             }`}>
               <span>{notificacion.texto}</span>
             </div>
           )}
           <div className="flex justify-between items-center">
-            <h2 className="text-lg font-bold text-slate-200 flex items-center gap-2">
-              <PackagePlus className="text-emerald-400" />
+            <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <PackagePlus className="text-emerald-600" />
               Catálogo de Productos
             </h2>
             <div className="flex gap-2">
               <button 
                 onClick={() => { cargarHistorial(); setShowHistoryModal(true); }}
-                className="text-xs bg-slate-700 text-slate-300 hover:bg-slate-600 hover:text-white px-3 py-1.5 rounded-lg transition font-semibold flex items-center gap-1"
+                className="text-xs bg-slate-200 hover:bg-slate-300 text-slate-800 border border-slate-300 px-3 py-1.5 rounded-lg transition font-bold flex items-center gap-1 shadow-sm cursor-pointer"
               >
                 <History size={14} /> Historial
               </button>
               <button 
                 onClick={agregarFaltantes}
-                className="text-xs bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 px-3 py-1.5 rounded-lg transition font-semibold"
+                className="text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-350 px-3 py-1.5 rounded-lg transition font-bold shadow-sm cursor-pointer"
                 title="Añadir automáticamente todos los productos con stock 5 o menos"
               >
                 + Sugerir Faltantes
@@ -374,19 +389,19 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
           </div>
           <div className="flex gap-2">
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-2.5 text-slate-500" size={18} />
+              <Search className="absolute left-3 top-2.5 text-slate-650" size={18} />
               <input 
                 type="text" 
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 placeholder="Buscar por nombre o código..." 
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-4 py-2 text-white focus:border-emerald-500 outline-none transition text-sm" 
+                className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-lg pl-9 pr-4 py-2 text-slate-900 focus:border-emerald-500 outline-none transition text-sm shadow-sm" 
               />
             </div>
             <select 
               value={categoryFilter}
               onChange={e => setCategoryFilter(e.target.value)}
-              className="w-40 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-emerald-500 outline-none transition appearance-none text-sm"
+              className="w-40 bg-white border border-slate-350 hover:border-slate-400 rounded-lg px-3 py-2 text-slate-900 focus:border-emerald-500 outline-none transition appearance-none text-sm shadow-sm cursor-pointer"
             >
               <option value="todas">Todas las categorías</option>
               {categories.map(c => <option key={c} value={c}>{c}</option>)}
@@ -395,31 +410,31 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
         </div>
 
         {/* Lista del Catálogo */}
-        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar-light-light-light">
           {filteredProducts.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-500 italic text-center px-4">
               <AlertTriangle size={32} className="mb-2 opacity-50" />
               No se encontraron productos.
             </div>
           ) : (
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-1.5">
               {filteredProducts.map(prod => (
-                <div key={prod.id} className="bg-slate-800 border border-slate-700 hover:border-emerald-500/50 rounded-lg p-3 flex items-center gap-3 transition group">
+                <div key={prod.id} className="bg-slate-50 border border-slate-200 hover:border-emerald-500/30 hover:bg-white hover:shadow-sm rounded-xl p-2.5 flex items-center gap-2.5 transition duration-150 group">
                   <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-slate-200 text-sm truncate">{prod.nombre}</div>
-                    <div className="flex items-center gap-3 mt-1 text-xs">
+                    <div className="font-semibold text-slate-800 text-sm truncate">{prod.nombre}</div>
+                    <div className="flex items-center gap-3 mt-0.5 text-[11px] font-medium">
                       <span className="text-slate-500 font-mono">{prod.codigoBarras || 'S/C'}</span>
-                      <span className={`font-bold ${prod.stock <= 5 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                      <span className={prod.stock <= 5 ? 'text-rose-600 font-bold' : 'text-slate-500'}>
                         Stock: {prod.stock}
                       </span>
                     </div>
                   </div>
                   <button 
                     onClick={() => agregarItem(prod, 1)}
-                    className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-500 border border-emerald-500/30 flex items-center justify-center hover:bg-emerald-500 hover:text-slate-900 transition flex-shrink-0 group-hover:scale-105"
+                    className="w-8 h-8 rounded-lg bg-emerald-50 hover:bg-emerald-100 hover:text-emerald-700 border border-emerald-200 text-emerald-600 flex items-center justify-center transition flex-shrink-0 cursor-pointer shadow-sm"
                     title="Añadir a la lista"
                   >
-                    <Plus size={20} />
+                    <Plus size={16} />
                   </button>
                 </div>
               ))}
@@ -429,11 +444,11 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
       </div>
 
       {/* PANEL DERECHO: ORDEN DE COMPRA */}
-      <div className="w-1/2 flex flex-col bg-slate-900 relative">
-        <div className="p-5 bg-slate-800 border-b border-slate-700 flex flex-col gap-3 shadow-md z-10">
+      <div className="w-1/2 flex flex-col bg-white relative">
+        <div className="p-3 px-4 bg-slate-50 border-b border-slate-200 flex flex-col gap-2.5 shadow-sm z-10">
           <div className="flex items-center justify-between">
-            <h2 className="text-xl font-bold flex items-center gap-2">
-              <ListPlus className="text-emerald-400" />
+            <h2 className="text-lg font-bold flex items-center gap-2">
+              <ListPlus className="text-emerald-600" size={20} />
               Mi Lista
             </h2>
             <div className="flex gap-2">
@@ -441,13 +456,13 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
                 <>
                   <button 
                     onClick={guardarListaActual}
-                    className="text-xs text-blue-400 hover:text-white font-semibold uppercase tracking-wider bg-blue-500/10 hover:bg-blue-600 px-3 py-1.5 rounded-lg border border-blue-500/30 transition flex items-center gap-1"
+                    className="text-xs text-blue-750 hover:text-blue-900 font-bold uppercase tracking-wider bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-300 transition flex items-center gap-1 cursor-pointer shadow-sm"
                   >
-                    <Save size={14} /> Guardar
+                    <Save size={13} /> Guardar
                   </button>
                   <button 
                     onClick={vaciarLista}
-                    className="text-xs text-rose-400 hover:text-white font-semibold uppercase tracking-wider bg-rose-500/10 hover:bg-rose-600 px-3 py-1.5 rounded-lg border border-rose-500/30 transition"
+                    className="text-xs text-rose-700 hover:text-rose-900 bg-rose-50 hover:bg-rose-100 px-2.5 py-1.5 rounded-lg border border-rose-300 transition font-bold uppercase tracking-wider cursor-pointer shadow-sm"
                   >
                     Vaciar
                   </button>
@@ -456,13 +471,13 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
             </div>
           </div>
           
-          <div className="flex items-center justify-between pt-2 border-t border-slate-700/50">
-            <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-300">
+          <div className="flex items-center justify-between pt-1.5 border-t border-slate-200">
+            <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-600 font-medium">
               <input 
                 type="checkbox" 
                 checked={mostrarCantidad}
                 onChange={(e) => setMostrarCantidad(e.target.checked)}
-                className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                className="w-4 h-4 accent-emerald-500 rounded cursor-pointer border-slate-300"
               />
               Incluir "Cantidad a pedir"
             </label>
@@ -470,39 +485,36 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
         </div>
         
         {/* Items Seleccionados */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar-light-light-light">
           {itemsCompra.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-500 italic text-center px-8">
-              <div className="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center mb-4">
-                <ListPlus size={32} className="text-slate-600" />
+              <div className="w-16 h-16 bg-slate-50 border border-slate-200 rounded-full flex items-center justify-center mb-3">
+                <ListPlus size={28} className="text-slate-400" />
               </div>
-              <p>Tu lista está vacía.</p>
-              <p className="text-sm mt-2">Busca productos en el catálogo de la izquierda y presiona el botón "+" para agregarlos aquí.</p>
+              <p className="text-sm font-semibold text-slate-700">Tu lista está vacía.</p>
+              <p className="text-xs mt-1 text-slate-500">Busca productos en el catálogo de la izquierda y presiona el botón "+" para agregarlos aquí.</p>
             </div>
           ) : (
             itemsCompra.map((item) => (
-              <div key={item.producto.id} className="flex flex-col bg-slate-800 p-3 rounded-lg border border-slate-700/50 hover:border-slate-600 transition">
-                <div className="flex justify-between items-start mb-2">
-                  <div className="font-semibold text-slate-200 pr-2 leading-tight">
+              <div key={item.producto.id} className="flex items-center justify-between bg-slate-50 p-2 px-3 rounded-xl border border-slate-200 hover:border-slate-300 transition shadow-sm gap-3">
+                {/* Left Side: Product Name & Code */}
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-slate-800 text-xs sm:text-sm truncate" title={item.producto.nombre}>
                     {item.producto.nombre}
                   </div>
-                  <button 
-                    onClick={() => removerItem(item.producto.id)} 
-                    className="text-slate-500 hover:text-red-400 p-1 hover:bg-red-400/10 rounded transition flex-shrink-0"
-                    title="Remover"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                    {item.producto.codigoBarras || 'S/C'}
+                  </div>
                 </div>
-                
-                <div className="flex justify-between items-end mt-auto">
+
+                {/* Right Side: Quantity selector/Category, Stock info and Trash button */}
+                <div className="flex items-center gap-3.5 flex-shrink-0">
                   {mostrarCantidad ? (
-                    <div className="flex flex-col">
-                      <span className="text-[10px] text-slate-500 uppercase font-semibold mb-1">Cant. a Pedir</span>
-                      <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center bg-white border border-slate-350 rounded-md overflow-hidden shadow-sm h-7">
                         <button 
                           onClick={() => actualizarCantidad(item.producto.id, item.cantidadPedir - 1)}
-                          className="w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold transition-colors"
+                          className="w-7 h-7 flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold border-r border-slate-200 active:scale-95 transition cursor-pointer"
                         >-</button>
                         <input 
                           type="number" 
@@ -513,28 +525,38 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
                             const val = parseFloat(e.target.value);
                             if (!isNaN(val)) actualizarCantidad(item.producto.id, val);
                           }}
-                          className="w-16 h-8 text-center bg-transparent text-emerald-400 font-bold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          className="w-10 h-7 text-center bg-transparent text-emerald-600 font-bold text-xs focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                         /> 
                         <button 
                           onClick={() => actualizarCantidad(item.producto.id, item.cantidadPedir + 1)}
-                          className="w-8 h-8 flex items-center justify-center bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold transition-colors"
+                          className="w-7 h-7 flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold border-l border-slate-200 active:scale-95 transition cursor-pointer"
                         >+</button>
                       </div>
                     </div>
                   ) : (
-                    <div className="text-slate-500 text-sm">
+                    <div className="text-slate-500 text-xs bg-slate-100 px-2 py-0.5 border border-slate-200 rounded font-medium">
                       {item.producto.categoria}
                     </div>
                   )}
-                  
-                  <div className="text-right">
-                    <div className="text-[10px] text-slate-500 mb-0.5">Stock Actual: <strong className={item.producto.stock <= 5 ? 'text-rose-400' : 'text-slate-300'}>{item.producto.stock}</strong></div>
+
+                  {/* Stock Actual & Costo info */}
+                  <div className="text-right text-xs min-w-[70px]">
+                    <div className="text-[10px] text-slate-500">Stk: <strong className={item.producto.stock <= 5 ? 'text-rose-600' : 'text-slate-700'}>{item.producto.stock}</strong></div>
                     {mostrarCantidad && (
-                      <div className="text-xs text-slate-400">
-                        Costo aprox: S/ {((item.producto.costo || 0) * item.cantidadPedir).toFixed(2)}
+                      <div className="text-[11px] text-slate-650 font-semibold mt-0.5">
+                        S/ {((item.producto.costo || 0) * item.cantidadPedir).toFixed(2)}
                       </div>
                     )}
                   </div>
+
+                  {/* Trash button */}
+                  <button 
+                    onClick={() => removerItem(item.producto.id)} 
+                    className="text-rose-500 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-100 p-1.5 rounded-lg transition flex-shrink-0 cursor-pointer shadow-sm"
+                    title="Remover de la lista"
+                  >
+                    <Trash2 size={14} />
+                  </button>
                 </div>
               </div>
             ))
@@ -542,14 +564,14 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
         </div>
         
         {/* Footer (Totales y Exportación) */}
-        <div className="bg-slate-800 p-5 border-t border-slate-700 shadow-[0_-10px_30px_rgba(0,0,0,0.3)]">
+        <div className="bg-slate-50 p-4 border-t border-slate-200 shadow-inner">
           {mostrarCantidad && (
-            <div className="flex justify-between items-center mb-4 px-2">
-              <div className="flex items-center gap-2 text-slate-400">
-                <Calculator size={18} />
-                <span className="text-sm font-semibold uppercase tracking-wider">Inversión Estimada</span>
+            <div className="flex justify-between items-center mb-3 px-2">
+              <div className="flex items-center gap-2 text-slate-500">
+                <Calculator size={16} />
+                <span className="text-xs font-semibold uppercase tracking-wider">Inversión Estimada</span>
               </div>
-              <span className="text-3xl font-black text-amber-400">S/ {costoTotalEstimado.toFixed(2)}</span>
+              <span className="text-2xl font-black text-amber-600">S/ {costoTotalEstimado.toFixed(2)}</span>
             </div>
           )}
           
@@ -557,17 +579,17 @@ export default function ListaCompras({ productos }: ListaComprasProps) {
             <button 
               onClick={generateWhatsAppMessage}
               disabled={itemsCompra.length === 0}
-              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold py-3 rounded-xl transition flex justify-center items-center gap-2 shadow-lg shadow-emerald-500/20 active:scale-[0.98]"
+              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-2.5 rounded-xl transition flex justify-center items-center gap-2 shadow-md shadow-emerald-500/10 cursor-pointer text-sm"
             >
-              <MessageCircle size={20} />
+              <MessageCircle size={18} />
               Enviar WhatsApp
             </button>
             <button 
               onClick={generatePDF}
               disabled={itemsCompra.length === 0}
-              className="w-full bg-rose-600 hover:bg-rose-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-bold py-3 rounded-xl transition flex justify-center items-center gap-2 shadow-lg shadow-rose-500/20 active:scale-[0.98]"
+              className="w-full bg-rose-700 hover:bg-rose-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-2.5 rounded-xl transition flex justify-center items-center gap-2 shadow-md shadow-rose-500/10 cursor-pointer text-sm"
             >
-              <FileText size={20} />
+              <FileText size={18} />
               Generar PDF
             </button>
           </div>

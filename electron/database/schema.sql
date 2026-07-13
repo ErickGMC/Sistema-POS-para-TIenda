@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS ventas (
     metodoPago TEXT NOT NULL,
     estado TEXT DEFAULT 'completada',
     clienteNombre TEXT,
-    clienteDocumento TEXT
+    clienteDocumento TEXT,
+    anulado INTEGER DEFAULT 0
 );
 
 -- Detalle de la Venta (Ticket)

@@ -15,6 +15,21 @@
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: #64748b;
   }
+  
+  /* Scrollbar para el tema claro */
+  .custom-scrollbar-light::-webkit-scrollbar {
+    width: 6px;
+  }
+  .custom-scrollbar-light::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar-light::-webkit-scrollbar-thumb {
+    background: #cbd5e1; /* slate-300 */
+    border-radius: 4px;
+  }
+  .custom-scrollbar-light::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8; /* slate-400 */
+  }
 }
 
 body {
@@ -51,4 +66,86 @@ input[type="submit"]:not(:disabled):active,
 .clickable:active {
   transform: scale(0.96);
   filter: brightness(0.9);
+}
+
+/* ==========================================
+   SISTEMA DE MÁXIMO CONTRASTE Y DIFERENCIACIÓN
+   ========================================== */
+
+/* 1. Etiquetas de Formulario (Labels) */
+label:not(.cursor-pointer) {
+  font-size: 10px !important;
+  font-weight: 800 !important;
+  color: #1e293b !important; /* slate-800 */
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  margin-bottom: 0.375rem !important;
+  display: block !important;
+}
+
+/* 2. Campos de Entrada (Inputs, Selects, Textareas) */
+input[type="text"],
+input[type="number"],
+input[type="email"],
+input[type="password"],
+input[type="date"],
+select,
+textarea {
+  border-color: #cbd5e1 !important; /* border-slate-300 */
+  border-width: 1.5px !important;
+  background-color: #ffffff !important;
+  color: #0f172a !important; /* slate-900 */
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
+  transition: all 150ms ease-in-out !important;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+input[type="date"]:focus,
+select:focus,
+textarea:focus {
+  border-color: #10b981 !important; /* border-emerald-500 */
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.15) !important;
+}
+
+/* 3. Tablas de Datos Uniformes */
+thead {
+  background-color: #e2e8f0 !important; /* slate-200 */
+  border-bottom: 2px solid #94a3b8 !important; /* slate-400 */
+}
+
+thead th {
+  color: #0f172a !important; /* slate-900 */
+  font-weight: 900 !important;
+  font-size: 11px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  padding: 0.75rem 0.75rem !important;
+}
+
+tbody tr {
+  border-bottom: 1px solid #cbd5e1 !important; /* slate-300 */
+  transition: background-color 150ms ease-in-out !important;
+}
+
+tbody tr:nth-child(even) {
+  background-color: #ffffff !important;
+}
+
+tbody tr:nth-child(odd) {
+  background-color: rgba(241, 245, 249, 0.8) !important; /* slate-50 */
+}
+
+tbody tr:hover {
+  background-color: #f1f5f9 !important; /* slate-100 */
+}
+
+/* 4. Tarjetas / Formularios Modulares */
+.card-modular {
+  background-color: #ffffff !important;
+  border: 1.5px solid #cbd5e1 !important;
+  border-radius: 1rem !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
 }

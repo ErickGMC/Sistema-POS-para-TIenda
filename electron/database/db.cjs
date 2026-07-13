@@ -55,6 +55,10 @@ const migrations = [
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             data TEXT
         )`);
+    },
+    // Version 7
+    () => {
+        db.exec("ALTER TABLE ventas ADD COLUMN anulado INTEGER DEFAULT 0");
     }
 ];
 
@@ -366,8 +370,19 @@ function obtenerVentas(filtros = {}) {
             query += ' AND total <= ?';
             params.push(parseFloat(filtros.maxMonto));
         }
+        if (filtros.metodoPago && filtros.metodoPago !== 'todos') {
+            query += ' AND metodoPago = ?';
+            params.push(filtros.metodoPago);
+        }
+        if (filtros.estado && filtros.estado !== 'todos') {
+            if (filtros.estado === 'anuladas') {
+                query += ' AND anulado = 1';
+            } else if (filtros.estado === 'completadas') {
+                query += ' AND anulado = 0';
+            }
+        }
 
-        query += ' ORDER BY fecha DESC LIMIT 100';
+        query += ' ORDER BY fecha DESC LIMIT 150';
 
         const ventas = db.prepare(query).all(...params);
 
@@ -396,7 +411,6 @@ function guardarVenta(ventaParams, detalleVenta) {
     const updateStock = db.prepare('UPDATE productos SET stock = stock - @cantidad WHERE id = @producto_id');
     const insertSync = db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (@entidad, @entidad_id, @operacion, @datos_json)');
     const getCorrelativo = db.prepare('SELECT siguiente_numero FROM correlativos WHERE serie = ?');
-    const updateCorrelativo = db.prepare('UPDATE correlativos SET siguiente_numero = siguiente_numero + 1 WHERE serie = ?');
 
     const tx = db.transaction((vParams, d) => {
         let finalVentaId = vParams.id;
@@ -468,6 +482,60 @@ function guardarVenta(ventaParams, detalleVenta) {
         return { success: true, ventaId: finalId };
     } catch (err) {
         console.error('Error al guardar venta:', err);
+        return { success: false, error: err.message };
+    }
+}
+
+function anularVenta(ventaId) {
+    const selectVenta = db.prepare('SELECT * FROM ventas WHERE id = ?');
+    const updateVentaAnulada = db.prepare('UPDATE ventas SET anulado = 1 WHERE id = ?');
+    const selectDetalles = db.prepare('SELECT producto_id, cantidad FROM ventas_detalle WHERE venta_id = ?');
+    const updateStock = db.prepare('UPDATE productos SET stock = stock + @cantidad WHERE id = @producto_id');
+    const insertSync = db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (@entidad, @entidad_id, @operacion, @datos_json)');
+    const selectProducto = db.prepare('SELECT * FROM productos WHERE id = ?');
+
+    const tx = db.transaction((id) => {
+        // Verificar si la venta existe y no está anulada
+        const venta = selectVenta.get(id);
+        if (!venta) throw new Error('Venta no encontrada');
+        if (venta.anulado === 1) throw new Error('La venta ya se encuentra anulada');
+
+        // Marcar como anulada
+        updateVentaAnulada.run(id);
+
+        // Obtener detalles para devolver el stock
+        const detalles = selectDetalles.all(id);
+        
+        for (const item of detalles) {
+            updateStock.run({ cantidad: item.cantidad, producto_id: item.producto_id });
+            const prodRow = selectProducto.get(item.producto_id);
+            if (prodRow) {
+                insertSync.run({
+                    entidad: 'producto',
+                    entidad_id: item.producto_id,
+                    operacion: 'UPDATE',
+                    datos_json: JSON.stringify(prodRow)
+                });
+            }
+        }
+
+        // Agregar a la cola de sync para actualizar el ticket a anulado en Firebase
+        venta.anulado = 1;
+        insertSync.run({
+            entidad: 'venta',
+            entidad_id: id,
+            operacion: 'UPDATE',
+            datos_json: JSON.stringify({ venta, detalle: detalles })
+        });
+        
+        return true;
+    });
+
+    try {
+        tx(ventaId);
+        return { success: true };
+    } catch (err) {
+        console.error('Error al anular venta:', err);
         return { success: false, error: err.message };
     }
 }
@@ -751,7 +819,7 @@ function obtenerDashboardDataLocal(tsInicioObj, strInicio) {
             for (const a of analytics) {
                 // Parse data and format timestamp
                 if (a.data) {
-                    try { a.data = JSON.parse(a.data); } catch(e) {}
+                    try { a.data = JSON.parse(a.data); } catch {}
                 }
                 a.timestamp = { seconds: Math.floor(new Date(a.timestamp).getTime() / 1000) };
             }
@@ -771,7 +839,7 @@ function obtenerAnalyticsLocal() {
         const events = db.prepare('SELECT * FROM analytics_events ORDER BY timestamp DESC LIMIT 100').all();
         for (const e of events) {
             if (e.data) {
-                try { e.data = JSON.parse(e.data); } catch(err) {}
+                try { e.data = JSON.parse(e.data); } catch {}
             }
             e.timestamp = { seconds: Math.floor(new Date(e.timestamp).getTime() / 1000) };
         }
@@ -793,6 +861,7 @@ module.exports = {
     actualizarProducto,
     eliminarProducto,
     guardarVenta,
+    anularVenta,
     obtenerVentas,
     login,
     obtenerUsuarios,

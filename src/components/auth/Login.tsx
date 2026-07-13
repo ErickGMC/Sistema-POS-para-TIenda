@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useUIStore } from '../../store/useUIStore';
-import { Store, Lock, User, LogIn, CloudDownload } from 'lucide-react';
+import { Store, Lock, User, LogIn } from 'lucide-react';
 
 export default function Login() {
   const [username, setUsername] = useState('');
@@ -21,7 +21,7 @@ export default function Login() {
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, []);
+  }, [setLoading]);
 
   // Traduce errores del backend a mensajes amigables para el usuario
   const traducirError = (errorMsg: string): string => {
@@ -66,18 +66,18 @@ export default function Login() {
 
 
   return (
-    <div className="h-screen w-screen bg-slate-950 flex flex-col items-center justify-center relative overflow-y-auto p-4">
+    <div className="h-screen w-screen bg-slate-50 flex flex-col items-center justify-center relative overflow-y-auto p-4">
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] bg-emerald-500/10 blur-[80px] rounded-full pointer-events-none"></div>
       
       <div className="w-full max-w-md z-10 relative">
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-5 backdrop-blur-xl">
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-2xl p-5 backdrop-blur-xl">
           
           <div className="flex flex-col items-center mb-5">
             <div className="w-14 h-14 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/30 mb-3">
-              <Store size={28} className="text-white" />
+              <Store size={28} className="text-slate-900" />
             </div>
-            <h1 className="text-xl font-bold text-white tracking-tight">Sistema POS</h1>
-            <p className="text-slate-400 mt-1 text-center text-xs">Ingresa tus credenciales de Firebase Auth para acceder</p>
+            <h1 className="text-xl font-bold text-slate-900 tracking-tight">Sistema POS</h1>
+            <p className="text-slate-600 mt-1 text-center text-xs">Ingresa tus credenciales de Firebase Auth para acceder</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-3">
@@ -89,7 +89,7 @@ export default function Login() {
             )}
 
             <div className="space-y-1">
-              <label className="text-sm font-medium text-slate-300 ml-1">Usuario</label>
+              <label className="text-sm font-medium text-slate-700 ml-1">Usuario</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
                   <User size={18} />
@@ -100,14 +100,14 @@ export default function Login() {
                   required
                   value={username}
                   onChange={e => setUsername(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl py-2.5 pl-10 pr-4 text-white outline-none transition-all text-sm"
+                  className="w-full bg-white border border-slate-350 hover:border-slate-400 focus:border-emerald-500 rounded-xl py-2.5 pl-10 pr-4 text-slate-900 outline-none transition-all text-sm shadow-sm"
                   placeholder="tu nombre de usuario"
                 />
               </div>
             </div>
 
             <div className="space-y-1">
-              <label className="text-sm font-medium text-slate-300 ml-1">Contraseña</label>
+              <label className="text-sm font-semibold text-slate-700 ml-1">Contraseña</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
                   <Lock size={18} />
@@ -117,7 +117,7 @@ export default function Login() {
                   required
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl py-2.5 pl-10 pr-4 text-white outline-none transition-all text-sm"
+                  className="w-full bg-white border border-slate-350 hover:border-slate-400 focus:border-emerald-500 rounded-xl py-2.5 pl-10 pr-4 text-slate-900 outline-none transition-all text-sm shadow-sm"
                   placeholder="••••••••"
                 />
               </div>
@@ -125,7 +125,7 @@ export default function Login() {
 
             <button
               type="submit"
-              className="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-base rounded-xl py-3 mt-3 transition-all duration-300 shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 group disabled:opacity-70 disabled:cursor-wait"
+              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-base rounded-xl py-3 mt-3 transition-all duration-300 shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 group disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
             >
               <LogIn size={18} className="group-hover:translate-x-1 transition-transform" />
               Acceder al Sistema

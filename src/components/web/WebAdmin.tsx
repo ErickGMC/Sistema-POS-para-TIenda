@@ -249,6 +249,8 @@ export default function WebAdmin() {
     } finally {
       setIsLoading(false);
     }
+  };
+
   const handleSaveIA = async (enabled: boolean) => {
     setIsLoading(true);
     try {

@@ -15,9 +15,15 @@ service cloud.firestore {
       allow write: if isAuthenticated();
     }
 
-    // VENTAS:
-    // - Información hipercrítica. Solo empleados logueados.
+    // VENTAS Y DETALLES:
+    // - Información de ventas, detalles y correlativo. Solo empleados logueados.
     match /ventas/{document=**} {
+      allow read, write: if isAuthenticated();
+    }
+    match /ventas_detalle/{document=**} {
+      allow read, write: if isAuthenticated();
+    }
+    match /ventas_correlativo/{document=**} {
       allow read, write: if isAuthenticated();
     }
 
@@ -54,6 +60,12 @@ service cloud.firestore {
     // LISTAS DE COMPRA (Reabastecimiento):
     // - Solo empleados logueados
     match /compras_listas/{document=**} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // AUDITORÍA:
+    // - Solo empleados logueados
+    match /audit_logs/{document=**} {
       allow read, write: if isAuthenticated();
     }
 

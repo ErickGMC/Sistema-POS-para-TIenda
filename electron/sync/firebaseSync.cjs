@@ -15,6 +15,12 @@ let storage = null;
 let secondaryApp = null;
 let secondaryAuth = null;
 
+// ── URL de la Tienda Web (para el webhook de embeddings) ───────────────────────
+// En desarrollo: http://localhost:3000
+// En producción: cambia a tu URL de Vercel/hosting
+const TIENDA_WEB_URL = process.env.TIENDA_WEB_URL || 'http://localhost:3000';
+const EMBED_SECRET = process.env.EMBED_SECRET || 'pos_embed_secret_minimarket_flor_2025';
+
 // Constante: Límite de operaciones por batch de Firestore
 const BATCH_LIMIT = 499;
 
@@ -137,6 +143,50 @@ function initFirebase() {
 loadConfig();
 
 // Helper para envolver promesas con timeout
+/**
+ * Genera el embedding de un producto llamando al endpoint /api/embed-producto
+ * de la Tienda-web. No bloquea la sincronización si falla.
+ *
+ * @param {object} producto - Datos del producto a embedear
+ */
+async function generarEmbeddingProducto(producto) {
+    const url = `${TIENDA_WEB_URL}/api/embed-producto`;
+    try {
+        const response = await withTimeout(
+            fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-embed-secret': EMBED_SECRET,
+                },
+                body: JSON.stringify({
+                    productoId: producto.id,
+                    nombre: producto.nombre,
+                    descripcion: producto.descripcion || null,
+                    categoria: producto.categoria || null,
+                    etiquetas: producto.etiquetas || null,
+                    precio: producto.precio || null,
+                    unidadMedida: producto.unidadMedida || null,
+                    disponible: Boolean(producto.disponible),
+                }),
+            }),
+            25000,
+            'Timeout al generar embedding del producto'
+        );
+
+        if (!response.ok) {
+            const errText = await response.text();
+            console.warn(`[Embed] ⚠️  Error HTTP ${response.status} para "${producto.nombre}": ${errText}`);
+        } else {
+            const data = await response.json();
+            console.log(`[Embed] ✅ Embedding de ${data.dims} dims guardado para: "${producto.nombre}"`);
+        }
+    } catch (err) {
+        // No bloqueante: la sincronización principal ya completó exitosamente
+        console.warn(`[Embed] ⚠️  No se pudo generar embedding para "${producto.nombre || producto.id}": ${err.message}`);
+    }
+}
+
 function withTimeout(promise, timeoutMs, errorMessage) {
     return Promise.race([
         promise,
@@ -314,6 +364,34 @@ async function sincronizarCola() {
                 tx(registrosProcesados);
                 totalProcesados += registrosProcesados.length;
                 console.log(`Batch sincronizado: ${registrosProcesados.length} registros.`);
+
+                // ── Hook post-sync: Generar embeddings para productos ──────────
+                // Se ejecuta DESPUÉS del commit para no bloquear la sincronización.
+                // Se lanza sin await para que sea completamente no-bloqueante.
+                const productosParaEmbed = chunk.filter(reg =>
+                    reg.entidad === 'producto' &&
+                    (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') &&
+                    registrosProcesados.includes(reg.id)
+                );
+
+                if (productosParaEmbed.length > 0) {
+                    const embedPromises = productosParaEmbed.map(reg => {
+                        try {
+                            const data = JSON.parse(reg.datos_json);
+                            return generarEmbeddingProducto(data);
+                        } catch { return Promise.resolve(); }
+                    });
+                    // No bloqueante: no esperamos a que terminen los embeddings
+                    Promise.allSettled(embedPromises).then(results => {
+                        const exitosos = results.filter(r => r.status === 'fulfilled').length;
+                        const fallidos = results.filter(r => r.status === 'rejected').length;
+                        if (productosParaEmbed.length > 0) {
+                            console.log(`[Embed] Resultado: ${exitosos} exitosos, ${fallidos} fallidos de ${productosParaEmbed.length} productos.`);
+                        }
+                    });
+                }
+                // ──────────────────────────────────────────────────────────────
+
             } catch (error) {
                 console.error('Error al comitear batch a Firestore:', error);
                 const errStmt = db.prepare('UPDATE sync_queue SET intentos = intentos + 1 WHERE id = ?');

@@ -60,6 +60,7 @@ export interface ComunidadConfig {
 export default function WebAdmin() {
   const [activeTab, setActiveTab] = useState<'general' | 'banners' | 'empresa' | 'comunidad' | 'ia'>('general');
   const [iaBusquedaHabilitada, setIaBusquedaHabilitada] = useState<boolean>(false);
+  const [iaComboHabilitado, setIaComboHabilitado] = useState<boolean>(false);
   const [config, setConfig] = useState<WebConfig>({
     whatsapp: '',
     ubicacion: '',
@@ -155,8 +156,9 @@ export default function WebAdmin() {
         setComunidad(loadedComunidad);
         setOriginalComunidad(loadedComunidad);
 
-        const loadedIA = configRes.config.ia || { iaBusquedaHabilitada: false };
+        const loadedIA = configRes.config.ia || { iaBusquedaHabilitada: false, iaCombosHabilitada: false };
         setIaBusquedaHabilitada(Boolean(loadedIA.iaBusquedaHabilitada));
+        setIaComboHabilitado(Boolean(loadedIA.iaCombosHabilitada));
       }
 
       const bannersRes = await (window as any).electron.obtenerBanners();
@@ -251,13 +253,30 @@ export default function WebAdmin() {
     }
   };
 
-  const handleSaveIA = async (enabled: boolean) => {
+  /**
+   * Guarda la configuración de IA en el POS.
+   * @param busquedaEnabled - Estado de la búsqueda IA
+   * @param combosEnabled - Estado de los combos IA (solo activo si busquedaEnabled es true)
+   */
+  const handleSaveIA = async (busquedaEnabled: boolean, combosEnabled: boolean) => {
     setIsLoading(true);
+    // Regla de negocio: si se desactiva la búsqueda, los combos también se desactivan
+    const finalCombosEnabled = busquedaEnabled ? combosEnabled : false;
     try {
-      const res = await (window as any).electron.guardarWebConfig('ia', { iaBusquedaHabilitada: enabled });
+      const res = await (window as any).electron.guardarWebConfig('ia', {
+        iaBusquedaHabilitada: busquedaEnabled,
+        iaCombosHabilitada: finalCombosEnabled,
+      });
       if (res.success) {
-        setIaBusquedaHabilitada(enabled);
-        mostrarMensaje(`Servicio de IA ${enabled ? 'ACTIVADO' : 'DESACTIVADO'} correctamente para la tienda web`);
+        setIaBusquedaHabilitada(busquedaEnabled);
+        setIaComboHabilitado(finalCombosEnabled);
+        let msg = `Búsqueda IA ${busquedaEnabled ? 'ACTIVADA' : 'DESACTIVADA'} correctamente`;
+        if (busquedaEnabled) {
+          msg += ` | Combos IA ${finalCombosEnabled ? 'ACTIVADOS' : 'DESACTIVADOS'}`;
+        } else {
+          msg += ` | Combos IA desactivados automáticamente`;
+        }
+        mostrarMensaje(msg);
       } else {
         mostrarMensaje('Error al guardar configuración de IA: ' + res.error, 'error');
       }
@@ -1148,54 +1167,111 @@ export default function WebAdmin() {
         {/* Formulario IA / RAG */}
         {activeTab === 'ia' && (
           <div className="space-y-5 flex-1 pb-10">
+            {/* Card principal del motor IA */}
             <div className="bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-200 rounded-2xl p-5 shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-purple-600 text-white rounded-xl shadow-md shadow-purple-600/20">
-                    <Sparkles size={24} />
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-black text-slate-900">Búsqueda Inteligente e IA RAG</h3>
-                    <p className="text-xs text-slate-600">Controla el motor de búsqueda vectorial y recomendador de combos de la tienda web.</p>
-                  </div>
+              <div className="flex items-center gap-3 mb-5">
+                <div className="p-3 bg-purple-600 text-white rounded-xl shadow-md shadow-purple-600/20">
+                  <Sparkles size={24} />
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => handleSaveIA(!iaBusquedaHabilitada)}
-                  disabled={isLoading}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer ${
-                    iaBusquedaHabilitada
-                      ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/20'
-                      : 'bg-slate-200 hover:bg-slate-300 text-slate-700 shadow-slate-200'
-                  }`}
-                >
-                  <Zap size={14} />
-                  <span>{iaBusquedaHabilitada ? 'IA ACTIVADA' : 'IA DESACTIVADA'}</span>
-                </button>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">Motor IA · RAG</h3>
+                  <p className="text-xs text-slate-600">Controla el motor de búsqueda vectorial y el armador de combos de la tienda web.</p>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
-                <div className="bg-white p-4 rounded-xl border border-purple-100 shadow-xs">
-                  <div className="flex items-center gap-2 text-xs font-bold text-slate-800 mb-1">
-                    <Zap size={14} className="text-amber-500" /> Nivel 1: Búsqueda Exacta
+              {/* ── Toggle 1: Búsqueda IA ─────────────────────────────── */}
+              <div className="bg-white rounded-xl border border-purple-100 p-4 mb-3 shadow-xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`p-2 rounded-lg ${iaBusquedaHabilitada ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      <Zap size={16} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-800">Búsqueda Inteligente</p>
+                      <p className="text-[11px] text-slate-500">Búsqueda semántica vectorial con Gemini Embeddings</p>
+                    </div>
                   </div>
-                  <p className="text-[11px] text-slate-500">Coincidencia rápida de texto por código o prefijo. Siempre activo. Costo $0.</p>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveIA(!iaBusquedaHabilitada, iaComboHabilitado)}
+                    disabled={isLoading}
+                    className={`relative w-12 h-6 rounded-full transition-all duration-300 focus:outline-none cursor-pointer flex-shrink-0 ${
+                      iaBusquedaHabilitada ? 'bg-purple-600' : 'bg-slate-300'
+                    } ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    title={iaBusquedaHabilitada ? 'Desactivar búsqueda IA' : 'Activar búsqueda IA'}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-300 ${iaBusquedaHabilitada ? 'translate-x-6' : 'translate-x-0'}`} />
+                  </button>
                 </div>
 
-                <div className="bg-white p-4 rounded-xl border border-purple-100 shadow-xs">
-                  <div className="flex items-center gap-2 text-xs font-bold text-slate-800 mb-1">
-                    <Cpu size={14} className="text-purple-600" /> Nivel 2: Vectorial RAG
+                {/* Indicador de estado */}
+                <div className={`mt-3 flex items-center gap-1.5 text-[11px] font-semibold ${iaBusquedaHabilitada ? 'text-purple-600' : 'text-slate-400'}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${iaBusquedaHabilitada ? 'bg-purple-500 animate-pulse' : 'bg-slate-300'}`} />
+                  {iaBusquedaHabilitada ? 'ACTIVA — Los clientes pueden buscar por conceptos (ej: "algo para el desayuno")' : 'INACTIVA — Solo búsqueda por texto exacto'}
+                </div>
+              </div>
+
+              {/* ── Toggle 2: Armador de Combos (dependiente de búsqueda) ─────── */}
+              <div className={`bg-white rounded-xl border p-4 shadow-xs transition-all duration-300 ${
+                iaBusquedaHabilitada ? 'border-indigo-100 opacity-100' : 'border-slate-100 opacity-50 pointer-events-none'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`p-2 rounded-lg ${iaComboHabilitado && iaBusquedaHabilitada ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      <Bot size={16} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-800">Armador de Combos</p>
+                      <p className="text-[11px] text-slate-500">Gemini 1.5 Flash arma compras personalizadas por descripción</p>
+                    </div>
                   </div>
-                  <p className="text-[11px] text-slate-500">Búsqueda semántica por conceptos usando Gemini Embeddings + Firestore Vector Search.</p>
+                  <button
+                    type="button"
+                    onClick={() => iaBusquedaHabilitada && handleSaveIA(iaBusquedaHabilitada, !iaComboHabilitado)}
+                    disabled={isLoading || !iaBusquedaHabilitada}
+                    className={`relative w-12 h-6 rounded-full transition-all duration-300 focus:outline-none flex-shrink-0 ${
+                      iaComboHabilitado && iaBusquedaHabilitada ? 'bg-indigo-600 cursor-pointer' : 'bg-slate-300 cursor-not-allowed'
+                    } ${isLoading ? 'opacity-50' : ''}`}
+                    title={!iaBusquedaHabilitada ? 'Primero activa la Búsqueda IA' : (iaComboHabilitado ? 'Desactivar combos' : 'Activar combos')}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-300 ${iaComboHabilitado && iaBusquedaHabilitada ? 'translate-x-6' : 'translate-x-0'}`} />
+                  </button>
                 </div>
 
-                <div className="bg-white p-4 rounded-xl border border-purple-100 shadow-xs">
-                  <div className="flex items-center gap-2 text-xs font-bold text-slate-800 mb-1">
-                    <Bot size={14} className="text-indigo-600" /> Nivel 3: Creador Combos
-                  </div>
-                  <p className="text-[11px] text-slate-500">LLM Gemini 1.5 Flash arma listas de compras a medida en 1-Clic a partir de descripciones naturales.</p>
+                {/* Indicador de estado */}
+                <div className={`mt-3 flex items-center gap-1.5 text-[11px] font-semibold ${iaComboHabilitado && iaBusquedaHabilitada ? 'text-indigo-600' : 'text-slate-400'}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${iaComboHabilitado && iaBusquedaHabilitada ? 'bg-indigo-500 animate-pulse' : 'bg-slate-300'}`} />
+                  {!iaBusquedaHabilitada
+                    ? 'Requiere que la Búsqueda IA esté activa'
+                    : iaComboHabilitado
+                      ? 'ACTIVO — Botón "Armar Combo" visible en la tienda web'
+                      : 'INACTIVO — El botón "Armar Combo" está oculto en la tienda web'
+                  }
                 </div>
+              </div>
+            </div>
+
+            {/* Niveles del sistema */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-800 mb-1">
+                  <Zap size={14} className="text-amber-500" /> Nivel 1: Búsqueda Exacta
+                </div>
+                <p className="text-[11px] text-slate-500">Coincidencia rápida de texto por código o prefijo. Siempre activo. Costo $0.</p>
+              </div>
+
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-800 mb-1">
+                  <Cpu size={14} className="text-purple-600" /> Nivel 2: Vectorial RAG
+                </div>
+                <p className="text-[11px] text-slate-500">Búsqueda semántica por conceptos usando Gemini Embeddings + Firestore Vector Search.</p>
+              </div>
+
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-800 mb-1">
+                  <Bot size={14} className="text-indigo-600" /> Nivel 3: Creador Combos
+                </div>
+                <p className="text-[11px] text-slate-500">LLM Gemini 1.5 Flash arma listas de compras a medida en 1-Clic a partir de descripciones naturales.</p>
               </div>
             </div>
           </div>

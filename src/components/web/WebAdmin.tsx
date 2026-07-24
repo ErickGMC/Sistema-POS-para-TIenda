@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Globe, Save, Plus, Edit2, Trash2, Check, AlertCircle, RefreshCw, Image as ImageIcon } from 'lucide-react';
+import { Globe, Save, Plus, Edit2, Trash2, Check, AlertCircle, RefreshCw, Image as ImageIcon, Sparkles, Bot, Zap, Cpu } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 
 interface Banner {
@@ -58,7 +58,8 @@ export interface ComunidadConfig {
 }
 
 export default function WebAdmin() {
-  const [activeTab, setActiveTab] = useState<'general' | 'banners' | 'empresa' | 'comunidad'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'banners' | 'empresa' | 'comunidad' | 'ia'>('general');
+  const [iaBusquedaHabilitada, setIaBusquedaHabilitada] = useState<boolean>(false);
   const [config, setConfig] = useState<WebConfig>({
     whatsapp: '',
     ubicacion: '',
@@ -153,6 +154,9 @@ export default function WebAdmin() {
         };
         setComunidad(loadedComunidad);
         setOriginalComunidad(loadedComunidad);
+
+        const loadedIA = configRes.config.ia || { iaBusquedaHabilitada: false };
+        setIaBusquedaHabilitada(Boolean(loadedIA.iaBusquedaHabilitada));
       }
 
       const bannersRes = await (window as any).electron.obtenerBanners();
@@ -242,6 +246,22 @@ export default function WebAdmin() {
     } catch (err) {
       console.error(err);
       mostrarMensaje('Error al guardar datos comunitarios', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  const handleSaveIA = async (enabled: boolean) => {
+    setIsLoading(true);
+    try {
+      const res = await (window as any).electron.guardarWebConfig('ia', { iaBusquedaHabilitada: enabled });
+      if (res.success) {
+        setIaBusquedaHabilitada(enabled);
+        mostrarMensaje(`Servicio de IA ${enabled ? 'ACTIVADO' : 'DESACTIVADO'} correctamente para la tienda web`);
+      } else {
+        mostrarMensaje('Error al guardar configuración de IA: ' + res.error, 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      mostrarMensaje('Error al guardar configuración de IA', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -489,6 +509,15 @@ export default function WebAdmin() {
             }`}
           >
             Banners
+          </button>
+          <button
+            onClick={() => { setActiveTab('ia'); resetBannerForm(); }}
+            className={`flex-1 py-2 px-1 text-xs font-bold rounded-md transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
+              activeTab === 'ia' ? 'bg-purple-600 text-white shadow-sm font-black' : 'text-purple-700 hover:text-purple-900 bg-purple-50 hover:bg-purple-100'
+            }`}
+          >
+            <Sparkles size={13} />
+            <span>IA / RAG</span>
           </button>
         </div>
 
@@ -1112,6 +1141,62 @@ export default function WebAdmin() {
               )}
             </button>
           </form>
+        )}
+
+        {/* Formulario IA / RAG */}
+        {activeTab === 'ia' && (
+          <div className="space-y-5 flex-1 pb-10">
+            <div className="bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-200 rounded-2xl p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-purple-600 text-white rounded-xl shadow-md shadow-purple-600/20">
+                    <Sparkles size={24} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">Búsqueda Inteligente e IA RAG</h3>
+                    <p className="text-xs text-slate-600">Controla el motor de búsqueda vectorial y recomendador de combos de la tienda web.</p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleSaveIA(!iaBusquedaHabilitada)}
+                  disabled={isLoading}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer ${
+                    iaBusquedaHabilitada
+                      ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/20'
+                      : 'bg-slate-200 hover:bg-slate-300 text-slate-700 shadow-slate-200'
+                  }`}
+                >
+                  <Zap size={14} />
+                  <span>{iaBusquedaHabilitada ? 'IA ACTIVADA' : 'IA DESACTIVADA'}</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+                <div className="bg-white p-4 rounded-xl border border-purple-100 shadow-xs">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-800 mb-1">
+                    <Zap size={14} className="text-amber-500" /> Nivel 1: Búsqueda Exacta
+                  </div>
+                  <p className="text-[11px] text-slate-500">Coincidencia rápida de texto por código o prefijo. Siempre activo. Costo $0.</p>
+                </div>
+
+                <div className="bg-white p-4 rounded-xl border border-purple-100 shadow-xs">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-800 mb-1">
+                    <Cpu size={14} className="text-purple-600" /> Nivel 2: Vectorial RAG
+                  </div>
+                  <p className="text-[11px] text-slate-500">Búsqueda semántica por conceptos usando Gemini Embeddings + Firestore Vector Search.</p>
+                </div>
+
+                <div className="bg-white p-4 rounded-xl border border-purple-100 shadow-xs">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-800 mb-1">
+                    <Bot size={14} className="text-indigo-600" /> Nivel 3: Creador Combos
+                  </div>
+                  <p className="text-[11px] text-slate-500">LLM Gemini 1.5 Flash arma listas de compras a medida en 1-Clic a partir de descripciones naturales.</p>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 

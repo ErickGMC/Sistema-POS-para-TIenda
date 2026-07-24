@@ -1,6 +1,6 @@
 const { db, limpiarUsuariosLocales } = require('../database/db.cjs');
 const { initializeApp, deleteApp, getApps } = require('firebase/app');
-const { getFirestore, doc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField } = require('firebase/firestore');
+const { getFirestore, doc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField, vector } = require('firebase/firestore');
 const { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } = require('firebase/auth');
 const { getStorage, ref, uploadBytes, getDownloadURL } = require('firebase/storage');
 
@@ -14,6 +14,11 @@ let auth = null;
 let storage = null;
 let secondaryApp = null;
 let secondaryAuth = null;
+
+// Helper para obtener la API Key de Gemini desde la configuración local o entorno
+function getGeminiApiKey() {
+    return process.env.GEMINI_API_KEY || (firebaseConfig && firebaseConfig.geminiApiKey) || '';
+}
 
 // ── URL de la Tienda Web (para el webhook de embeddings) ───────────────────────
 // En desarrollo: http://localhost:3000
@@ -141,6 +146,70 @@ function initFirebase() {
 
 // Intentar inicializar al arrancar
 loadConfig();
+
+/**
+ * Parsea etiquetas que pueden estar sobre-escapadas en SQLite
+ */
+function parsearEtiquetasSync(raw) {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw.filter(e => typeof e === 'string');
+    if (typeof raw === 'object') return Object.values(raw).filter(e => typeof e === 'string');
+    let val = raw;
+    for (let i = 0; i < 5; i++) {
+        try {
+            val = JSON.parse(val);
+            if (Array.isArray(val)) return val.filter(e => typeof e === 'string');
+            if (typeof val !== 'string') return [];
+        } catch {
+            return [];
+        }
+    }
+    return [];
+}
+
+/**
+ * Construye el texto RAG idéntico al usado en Tienda-web y script de migración
+ */
+function construirTextoRAGSync(p) {
+    const partes = [
+        `Producto: ${p.nombre}`,
+        `Categoría: ${p.categoria || 'Sin categoría'}`,
+    ];
+    if (p.descripcion && p.descripcion.trim()) {
+        partes.push(`Descripción: ${p.descripcion.trim()}`);
+    }
+    const etiquetas = parsearEtiquetasSync(p.etiquetas);
+    if (etiquetas.length > 0) {
+        partes.push(`Etiquetas: ${etiquetas.join(', ')}`);
+    }
+    if (p.unidadMedida && p.unidadMedida !== 'unidad') {
+        partes.push(`Unidad: ${p.unidadMedida}`);
+    }
+    partes.push(`Disponible: ${p.disponible ? 'Sí' : 'No'}`);
+    if (p.precio != null && Number(p.precio) > 0) {
+        partes.push(`Precio: S/ ${Number(p.precio).toFixed(2)}`);
+    }
+    return partes.join('. ');
+}
+
+/**
+ * Genera el VectorValue (768 dims) directamente usando Gemini API
+ */
+async function obtenerVectorEmbedding(textoRAG) {
+    const apiKey = getGeminiApiKey();
+    if (!apiKey) return null;
+    try {
+        const { GoogleGenerativeAI } = require('@google/generative-ai');
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const embeddingModel = genAI.getGenerativeModel({ model: 'gemini-embedding-001' });
+        const result = await embeddingModel.embedContent(textoRAG);
+        const values = result.embedding.values.slice(0, 768);
+        return vector(values);
+    } catch (err) {
+        console.warn('[Sync Embedding] Warning generando embedding:', err.message);
+        return null;
+    }
+}
 
 // Helper para envolver promesas con timeout
 /**
@@ -288,6 +357,18 @@ async function sincronizarCola() {
                         finalData.thumbnailLocal = deleteField();
                         finalData.thumbnailUrl = deleteField();
                         
+                        // Generar e incluir texto_rag y vector de embedding nativo (768 dims)
+                        try {
+                            const textoRAG = construirTextoRAGSync(finalData);
+                            finalData.texto_rag = textoRAG;
+                            const vectorVal = await obtenerVectorEmbedding(textoRAG);
+                            if (vectorVal) {
+                                finalData.embedding = vectorVal;
+                            }
+                        } catch (embedErr) {
+                            console.warn(`[Sync] Warning generando embedding para ${finalData.nombre}:`, embedErr.message);
+                        }
+
                         batch.set(docRef, finalData, { merge: true });
                     } else if (reg.operacion === 'DELETE') {
                         batch.delete(docRef);

@@ -24,6 +24,8 @@ dist-ssr
 *.sw?
 release/
 firebase_config.json
+scratch/service-account.json
+*.json
 pos.db
 pos.db-shm
 pos.db-wal

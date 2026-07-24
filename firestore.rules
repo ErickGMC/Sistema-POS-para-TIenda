@@ -26,6 +26,9 @@ service cloud.firestore {
     match /ventas_correlativo/{document=**} {
       allow read, write: if isAuthenticated();
     }
+    match /correlativos/{document=**} {
+      allow read, write: if isAuthenticated();
+    }
 
     // ANALYTICS EVENTS:
     // - Las visitas a la web se registran de forma anónima (create público)

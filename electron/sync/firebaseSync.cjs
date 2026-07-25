@@ -210,8 +210,11 @@ async function obtenerVectorEmbedding(textoRAG) {
         const genAI = new GoogleGenerativeAI(apiKey);
         const modelo = process.env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-2';
         const embeddingModel = genAI.getGenerativeModel({ model: modelo });
-        const result = await embeddingModel.embedContent(textoRAG);
-        const values = result.embedding.values;
+        const result = await embeddingModel.embedContent({
+            content: { parts: [{ text: textoRAG }] },
+            outputDimensionality: 768
+        });
+        const values = result.embedding.values.slice(0, 768);
         return vector(values);
     } catch (err) {
         console.warn('[Sync Embedding] Warning generando embedding:', err.message);

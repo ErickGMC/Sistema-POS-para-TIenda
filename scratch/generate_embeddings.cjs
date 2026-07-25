@@ -42,7 +42,7 @@ if (!GEMINI_API_KEY) {
   console.error('❌ Falta la variable de entorno GEMINI_API_KEY');
   process.exit(1);
 }
-const EMBEDDING_MODEL = 'gemini-embedding-001';
+const EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-2';
 // Firestore acepta máximo 2048 dims; usamos 768 para eficiencia y compatibilidad con el índice
 const EMBEDDING_DIMS = 768;
 // Pausa entre requests para no saturar la API (ms)

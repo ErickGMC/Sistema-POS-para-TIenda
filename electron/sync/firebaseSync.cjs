@@ -207,6 +207,7 @@ async function obtenerVectorEmbedding(textoRAG) {
     if (!apiKey) return null;
     try {
         const { GoogleGenerativeAI } = require('@google/generative-ai');
+        const genAI = new GoogleGenerativeAI(apiKey);
         const modelo = process.env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-2';
         const embeddingModel = genAI.getGenerativeModel({ model: modelo });
         const result = await embeddingModel.embedContent(textoRAG);

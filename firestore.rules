@@ -30,14 +30,6 @@ service cloud.firestore {
       allow read, write: if isAuthenticated();
     }
 
-    // ANALYTICS EVENTS:
-    // - Las visitas a la web se registran de forma anónima (create público)
-    // - Solo los empleados pueden leerlas (para el Dashboard)
-    match /analytics_events/{document=**} {
-      allow create: if true;
-      allow read, update, delete: if isAuthenticated();
-    }
-
     // USUARIOS (Roles):
     // - Solo empleados autenticados pueden leer/escribir.
     match /usuarios/{document=**} {

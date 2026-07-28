@@ -881,6 +881,5 @@ module.exports = {
     descargarDatosDesdeNube,
     obtenerDashboardData,
     crearUsuarioAuth,
-    buildAuthEmail,
-    descargarAnalyticsSolo
+    buildAuthEmail
 };

@@ -5,16 +5,15 @@ import GestionUsuarios from './components/users/GestionUsuarios';
 import Login from './components/auth/Login';
 import HistorialVentas from './components/pos/HistorialVentas';
 import WebAdmin from './components/web/WebAdmin';
-import Dashboard from './components/dashboard/Dashboard';
 import SetupFirebase from './components/auth/SetupFirebase';
 import { useAuthStore } from './store/useAuthStore';
 import { useUIStore } from './store/useUIStore';
 import GlobalLoading from './components/ui/GlobalLoading';
 import GlobalDialog from './components/ui/GlobalDialog';
-import { ShoppingCart, Package, Users, LogOut, Cloud, CloudOff, RefreshCw, Check, X, Receipt, Globe, ShieldAlert, BarChart3, CloudDownload, MessageCircle } from 'lucide-react';
+import { ShoppingCart, Package, Users, LogOut, Cloud, CloudOff, RefreshCw, Check, X, Receipt, Globe, ShieldAlert, CloudDownload, MessageCircle } from 'lucide-react';
 
 function App() {
-  const [vistaActiva, setVistaActiva] = useState<'pos' | 'ventas' | 'inventario' | 'usuarios' | 'web' | 'dashboard'>('pos');
+  const [vistaActiva, setVistaActiva] = useState<'pos' | 'ventas' | 'inventario' | 'usuarios' | 'web'>('pos');
   const { isAuthenticated, user, logout } = useAuthStore();
   const { setLoading } = useUIStore();
   const [online, setOnline] = useState(navigator.onLine);
@@ -315,16 +314,6 @@ function App() {
             </button>
           )}
 
-          {(hasPermission('ventas:historial') || hasPermission('web:configurar')) && (
-            <button 
-              onClick={() => setVistaActiva('dashboard')}
-              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'dashboard' ? 'bg-blue-500 text-white scale-105 shadow-lg shadow-blue-500/20' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
-              title="Dashboard"
-            >
-              <BarChart3 size={26} strokeWidth={2.5} />
-            </button>
-          )}
-
           {/* WhatsApp Web Integrado */}
           <button 
             onClick={() => {
@@ -441,10 +430,6 @@ function App() {
           
           <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'web' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
             {vistaActiva === 'web' && hasPermission('web:configurar') && <WebAdmin />}
-          </div>
-
-          <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'dashboard' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-            {vistaActiva === 'dashboard' && (hasPermission('ventas:historial') || hasPermission('web:configurar')) && <Dashboard />}
           </div>
         </div>
 

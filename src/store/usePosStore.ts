@@ -28,23 +28,31 @@ interface PosState {
   carrito: ItemCarrito[];
   total: number;
   modoPago: string;
+  clienteNombre: string;
+  clienteDocumento: string;
+  clienteTelefono: string;
+
   agregarProducto: (producto: Producto, cantidad?: number) => void;
+  agregarItemPersonalizado: (nombre: string, precio: number, cantidad?: number) => void;
   removerProducto: (idTicket: string) => void;
   actualizarCantidad: (idTicket: string, cantidad: number) => void;
+  actualizarPrecioItem: (idTicket: string, precio: number) => void;
   limpiarCarrito: () => void;
   setModoPago: (modo: string) => void;
+  setClienteNombre: (nombre: string) => void;
+  setClienteDocumento: (doc: string) => void;
+  setClienteTelefono: (tel: string) => void;
 }
 
 export const usePosStore = create<PosState>((set) => ({
   carrito: [],
   total: 0,
   modoPago: 'efectivo',
+  clienteNombre: '',
+  clienteDocumento: '',
+  clienteTelefono: '',
   
   agregarProducto: (producto, cantidad = 1) => set((state) => {
-    // Si ya existe y se pesa por unidad, sumar cantidad.
-    // Si es peso (ej 0.5 kg), puede que queramos un item separado o sumar.
-    // Por simplicidad, agregamos como item separado o buscamos existente si es unidad.
-    
     let nuevoCarrito;
     const existenteIndex = state.carrito.findIndex(item => item.producto.id === producto.id);
     
@@ -65,6 +73,31 @@ export const usePosStore = create<PosState>((set) => ({
     const nuevoTotal = nuevoCarrito.reduce((acc, item) => acc + item.subtotal, 0);
     return { carrito: nuevoCarrito, total: nuevoTotal };
   }),
+
+  agregarItemPersonalizado: (nombre, precio, cantidad = 1) => set((state) => {
+    const customProd: Producto = {
+      id: `custom-${window.crypto.randomUUID()}`,
+      nombre: (nombre && nombre.trim()) ? nombre.trim() : 'Servicio / Ítem Libre',
+      descripcion: 'Servicio / Ítem personalizado',
+      categoria: 'Servicios/Varios',
+      precio: Math.max(0, precio),
+      stock: 999999,
+      unidadMedida: 'unidad',
+      disponible: true,
+      destacado: false,
+    };
+
+    const nuevoItem: ItemCarrito = {
+      idTicket: window.crypto.randomUUID(),
+      producto: customProd,
+      cantidad: Math.max(1, cantidad),
+      subtotal: Math.max(1, cantidad) * customProd.precio,
+    };
+
+    const nuevoCarrito = [...state.carrito, nuevoItem];
+    const nuevoTotal = nuevoCarrito.reduce((acc, item) => acc + item.subtotal, 0);
+    return { carrito: nuevoCarrito, total: nuevoTotal };
+  }),
   
   removerProducto: (idTicket) => set((state) => {
     const nuevoCarrito = state.carrito.filter(item => item.idTicket !== idTicket);
@@ -82,8 +115,27 @@ export const usePosStore = create<PosState>((set) => ({
     const nuevoTotal = nuevoCarrito.reduce((acc, item) => acc + item.subtotal, 0);
     return { carrito: nuevoCarrito, total: nuevoTotal };
   }),
+
+  actualizarPrecioItem: (idTicket, precio) => set((state) => {
+    const nuevoPrecio = Math.max(0, precio);
+    const nuevoCarrito = state.carrito.map(item => {
+      if (item.idTicket === idTicket) {
+        return {
+          ...item,
+          producto: { ...item.producto, precio: nuevoPrecio },
+          subtotal: item.cantidad * nuevoPrecio
+        };
+      }
+      return item;
+    });
+    const nuevoTotal = nuevoCarrito.reduce((acc, item) => acc + item.subtotal, 0);
+    return { carrito: nuevoCarrito, total: nuevoTotal };
+  }),
   
-  limpiarCarrito: () => set({ carrito: [], total: 0 }),
+  limpiarCarrito: () => set({ carrito: [], total: 0, clienteNombre: '', clienteDocumento: '', clienteTelefono: '' }),
   
-  setModoPago: (modo) => set({ modoPago: modo })
+  setModoPago: (modo) => set({ modoPago: modo }),
+  setClienteNombre: (nombre) => set({ clienteNombre: nombre }),
+  setClienteDocumento: (doc) => set({ clienteDocumento: doc }),
+  setClienteTelefono: (tel) => set({ clienteTelefono: tel }),
 }));

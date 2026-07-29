@@ -454,15 +454,17 @@ function guardarVenta(ventaParams, detalleVenta) {
                 precio_unitario: item.precio_unitario,
                 subtotal: item.subtotal
             });
-            updateStock.run({ cantidad: item.cantidad, producto_id: item.producto_id });
-            const prodRow = db.prepare('SELECT * FROM productos WHERE id = ?').get(item.producto_id);
-            if (prodRow) {
-                insertSync.run({
-                    entidad: 'producto',
-                    entidad_id: item.producto_id,
-                    operacion: 'UPDATE',
-                    datos_json: JSON.stringify(prodRow)
-                });
+            if (!item.producto_id.startsWith('custom-')) {
+                updateStock.run({ cantidad: item.cantidad, producto_id: item.producto_id });
+                const prodRow = db.prepare('SELECT * FROM productos WHERE id = ?').get(item.producto_id);
+                if (prodRow) {
+                    insertSync.run({
+                        entidad: 'producto',
+                        entidad_id: item.producto_id,
+                        operacion: 'UPDATE',
+                        datos_json: JSON.stringify(prodRow)
+                    });
+                }
             }
         }
         

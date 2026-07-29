@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { usePosStore } from '../../store/usePosStore';
-import { Search, ShoppingCart, CreditCard, Banknote, Trash2, X, MessageCircle, CheckCircle2, Phone, Image as ImageIcon, List, LayoutGrid } from 'lucide-react';
+import { Search, ShoppingCart, CreditCard, Banknote, Trash2, X, MessageCircle, CheckCircle2, Phone, Image as ImageIcon, List, LayoutGrid, PlusCircle, FileText } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
+import { generarHtmlTicket } from '../../utils/ticketPrinter';
 
 export default function CajaRegistradora() {
-  const { carrito, total, agregarProducto, removerProducto, actualizarCantidad, limpiarCarrito } = usePosStore();
+  const {
+    carrito, total, agregarProducto, agregarItemPersonalizado, removerProducto,
+    actualizarCantidad, actualizarPrecioItem, limpiarCarrito, clienteTelefono, setClienteTelefono
+  } = usePosStore();
   const [codigoTerm, setCodigoTerm] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [mensaje, setMensaje] = useState('');
@@ -13,6 +17,12 @@ export default function CajaRegistradora() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [cargandoCobro, setCargandoCobro] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Modal Ítem Libre / Servicio
+  const [customModalOpen, setCustomModalOpen] = useState(false);
+  const [customNombre, setCustomNombre] = useState('');
+  const [customPrecio, setCustomPrecio] = useState('');
+  const [customCantidad, setCustomCantidad] = useState('1');
 
   // Estados del modal de cobro
   const [modalCobroOpen, setModalCobroOpen] = useState(false);
@@ -174,6 +184,59 @@ export default function CajaRegistradora() {
     }
     
     inputRef.current?.focus();
+  };
+
+  const handleGuardarItemPersonalizado = (e: React.FormEvent) => {
+    e.preventDefault();
+    const precio = parseFloat(customPrecio) || 0;
+    const cantidad = parseInt(customCantidad) || 1;
+    if (!customNombre.trim()) {
+      mostrarMensaje('Ingresa un nombre para el ítem o servicio');
+      return;
+    }
+    agregarItemPersonalizado(customNombre.trim(), precio, cantidad);
+    setCustomNombre('');
+    setCustomPrecio('');
+    setCustomCantidad('1');
+    setCustomModalOpen(false);
+    mostrarMensaje(`✓ "${customNombre.trim()}" agregado a la cesta`);
+  };
+
+  const imprimirTicketPDF4x6 = (ventaData?: any) => {
+    const vData = ventaData || ventaCompletada;
+    if (!vData) return;
+
+    const ticketVenta = {
+      id: vData.id || 'M001',
+      total: vData.total || total,
+      metodoPago: metodoPago,
+      clienteNombre: clienteNombre || 'PÚBLICO GENERAL',
+      clienteDocumento: clienteDocumento || '',
+      fecha_creacion: vData.fecha || new Date().toISOString()
+    };
+
+    const ticketDetalle = (vData.detalles || carrito).map((d: any) => ({
+      nombre: d.producto_nombre || d.producto?.nombre || 'Producto',
+      cantidad: d.cantidad,
+      precio: d.precio_unitario || d.producto?.precio || 0
+    }));
+
+    const html = generarHtmlTicket(
+      ticketVenta,
+      ticketDetalle,
+      {},
+      { nombreTienda: 'MINIMARKET FLOR' }
+    );
+
+    const win = window.open('', '_blank', 'width=450,height=650');
+    if (win) {
+      win.document.write(html);
+      win.document.close();
+      win.focus();
+      setTimeout(() => {
+        win.print();
+      }, 300);
+    }
   };
 
   const abrirPanelCobro = () => {
@@ -462,32 +525,49 @@ export default function CajaRegistradora() {
             <ShoppingCart className="text-emerald-600" size={20} />
             Cesta de Compra
           </h2>
-          {carrito.length > 0 && (
+          <div className="flex items-center gap-2">
             <button 
-              onClick={() => {
-                setConfirmDialog({
-                  isOpen: true,
-                  title: 'Vaciar Cesta',
-                  message: '¿Estás seguro de que deseas vaciar toda la cesta actual?',
-                  onConfirm: () => {
-                    limpiarCarrito();
-                    setConfirmDialog(prev => ({ ...prev, isOpen: false }));
-                    setTimeout(() => inputRef.current?.focus(), 100);
-                  }
-                });
-              }}
-              className="text-xs text-rose-500 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition font-semibold uppercase tracking-wider"
+              onClick={() => setCustomModalOpen(true)}
+              className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-2.5 py-1 rounded transition font-bold flex items-center gap-1 shadow-sm"
+              title="Agregar producto o servicio no catalogado"
             >
-              Vaciar
+              <PlusCircle size={14} />
+              + Ítem Libre
             </button>
-          )}
+            {carrito.length > 0 && (
+              <button 
+                onClick={() => {
+                  setConfirmDialog({
+                    isOpen: true,
+                    title: 'Vaciar Cesta',
+                    message: '¿Estás seguro de que deseas vaciar toda la cesta actual?',
+                    onConfirm: () => {
+                      limpiarCarrito();
+                      setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+                      setTimeout(() => inputRef.current?.focus(), 100);
+                    }
+                  });
+                }}
+                className="text-xs text-rose-500 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded transition font-semibold uppercase tracking-wider"
+              >
+                Vaciar
+              </button>
+            )}
+          </div>
         </div>
         
         {/* Lista de Items */}
         <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-slate-50/80 border-y border-slate-250 custom-scrollbar-light">
           {carrito.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-slate-500 italic text-center text-xs">
-              Añade productos para iniciar la venta
+            <div className="h-full flex items-center justify-center text-slate-500 italic text-center text-xs flex-col gap-3">
+              <span>Añade productos para iniciar la venta</span>
+              <button 
+                onClick={() => setCustomModalOpen(true)}
+                className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 shadow"
+              >
+                <PlusCircle size={14} />
+                + Agregar Servicio / Ítem Libre
+              </button>
             </div>
           ) : (
             carrito.map((item) => (
@@ -503,8 +583,11 @@ export default function CajaRegistradora() {
                 <div className="flex-1 min-w-0 flex flex-col justify-between py-0.5">
                   {/* Fila Superior: Nombre y Subtotal */}
                   <div className="flex justify-between items-start gap-2">
-                    <span className="font-bold text-slate-850 text-xs sm:text-sm truncate flex-1 leading-tight" title={item.producto.nombre}>
+                    <span className="font-bold text-slate-850 text-xs sm:text-sm truncate flex-1 leading-tight flex items-center gap-1" title={item.producto.nombre}>
                       {item.producto.nombre}
+                      {item.producto.id.startsWith('custom-') && (
+                        <span className="bg-indigo-100 text-indigo-700 text-[9px] font-black px-1.5 py-0.5 rounded-full">Libre</span>
+                      )}
                     </span>
                     <span className="font-extrabold text-slate-900 text-sm flex-shrink-0 leading-tight">
                       S/ {item.subtotal.toFixed(2)}
@@ -563,9 +646,22 @@ export default function CajaRegistradora() {
                           +
                         </button>
                       </div>
-                      <span className="text-[10px] text-slate-500 font-medium">
-                        x S/ {item.producto.precio.toFixed(2)}
-                      </span>
+                      
+                      {/* Campo de edición de precio temporal */}
+                      <div className="flex items-center gap-1 bg-amber-50 border border-amber-300 px-1.5 py-0.5 rounded shadow-xs" title="Editar precio del ítem para el ticket (BD intacta)">
+                        <span className="text-[10px] text-amber-700 font-bold">S/</span>
+                        <input
+                          type="number"
+                          step="0.10"
+                          min="0"
+                          value={item.producto.precio}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            actualizarPrecioItem(item.idTicket, isNaN(val) ? 0 : val);
+                          }}
+                          className="w-14 h-5 text-right bg-transparent text-amber-900 text-xs font-extrabold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        />
+                      </div>
                     </div>
 
                     {/* Botón de eliminar */}
@@ -663,41 +759,50 @@ export default function CajaRegistradora() {
                 <h3 className="text-2xl font-bold text-slate-900 mb-2">¡Venta Exitosa!</h3>
                 <p className="text-slate-600 mb-6">El ticket <strong className="text-emerald-600">{ventaCompletada.id}</strong> se ha guardado correctamente.</p>
                 
-                <div className="w-full bg-slate-50/50 border border-slate-200 rounded-2xl p-6 mb-6">
-                  <span className="block text-sm text-slate-600 mb-2">Monto Cobrado</span>
+                <div className="w-full bg-slate-50/50 border border-slate-200 rounded-2xl p-4 mb-5 text-center">
+                  <span className="block text-xs text-slate-500 mb-1 font-semibold uppercase tracking-wider">Monto Cobrado</span>
                   <span className="text-4xl font-black text-emerald-600">S/ {ventaCompletada.total.toFixed(2)}</span>
                 </div>
 
-                <div className="w-full mb-6 text-left">
-                  <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2 ml-1 flex items-center gap-2">
-                    <Phone size={14}/> Enviar Ticket por WhatsApp
-                  </label>
-                  <div className="flex gap-2">
-                    <div className="relative flex-1">
-                      <span className="absolute left-3 top-3.5 text-slate-650 text-sm font-semibold">+</span>
-                      <input 
-                        type="text" 
-                        placeholder="Ej: 51999999999" 
-                        value={waPhone}
-                        onChange={(e) => setWaPhone(e.target.value.replace(/\D/g, ''))}
-                        className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-xl p-3 pl-8 text-slate-900 focus:border-[#25D366] focus:ring-1 focus:ring-[#25D366] outline-none transition-all shadow-sm"
-                      />
+                <div className="w-full space-y-3 mb-6">
+                  <button
+                    onClick={() => imprimirTicketPDF4x6(ventaCompletada)}
+                    className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm rounded-xl transition flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                  >
+                    <FileText size={20} />
+                    📲 Generar / Enviar Ticket PDF (Ficha 4x6)
+                  </button>
+
+                  <div className="w-full text-left pt-2 border-t border-slate-200">
+                    <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2 ml-1 flex items-center gap-2">
+                      <Phone size={14}/> Enviar Texto por WhatsApp
+                    </label>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <span className="absolute left-3 top-3.5 text-slate-650 text-sm font-semibold">+</span>
+                        <input 
+                          type="text" 
+                          placeholder="Ej: 51999999999" 
+                          value={waPhone || clienteTelefono}
+                          onChange={(e) => setWaPhone(e.target.value.replace(/\D/g, ''))}
+                          className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-xl p-3 pl-8 text-slate-900 focus:border-[#25D366] focus:ring-1 focus:ring-[#25D366] outline-none transition-all shadow-sm font-bold text-sm"
+                        />
+                      </div>
+                      <button 
+                        onClick={enviarWhatsApp}
+                        className="bg-[#25D366] hover:bg-[#20b858] text-slate-950 font-black px-4 rounded-xl flex items-center justify-center transition-colors shadow-md shadow-[#25D366]/20 cursor-pointer"
+                      >
+                        <MessageCircle size={20} />
+                      </button>
                     </div>
-                    <button 
-                      onClick={enviarWhatsApp}
-                      className="bg-[#25D366] hover:bg-[#20b858] disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-bold px-4 rounded-xl flex items-center justify-center transition-colors shadow-lg shadow-[#25D366]/20 cursor-pointer"
-                    >
-                      <MessageCircle size={20} />
-                    </button>
                   </div>
-                  <p className="text-xs text-slate-500 mt-2 ml-1">Incluye código de país (Ej: 51 para Perú)</p>
                 </div>
 
                 <button
                   onClick={() => { setModalCobroOpen(false); setVentaCompletada(null); }}
-                  className="w-full py-4 bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 shadow-sm font-bold text-lg rounded-xl transition flex items-center justify-center gap-2"
+                  className="w-full py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 font-bold text-sm rounded-xl transition flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  Continuar (Nueva Venta)
+                  ✓ Finalizar (Nueva Venta)
                 </button>
               </div>
             ) : (
@@ -772,9 +877,9 @@ export default function CajaRegistradora() {
                 </div>
               )}
 
-              {/* Datos de Cliente para Ticket Electrónico */}
+              {/* Datos de Cliente & Contacto */}
               <div className="bg-slate-50 border border-slate-300 rounded-2xl p-4 shadow-sm space-y-2.5">
-                <span className="block text-[10px] font-extrabold text-slate-700 uppercase tracking-wider ml-1">Datos del Cliente (Opcional - SUNAT)</span>
+                <span className="block text-[10px] font-extrabold text-slate-700 uppercase tracking-wider ml-1">Datos del Cliente & WhatsApp (Opcional)</span>
                 <div className="grid grid-cols-3 gap-3">
                   <div className="col-span-1">
                     <input
@@ -795,6 +900,15 @@ export default function CajaRegistradora() {
                       className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-xl p-3 text-sm text-slate-900 focus:border-blue-500 outline-none shadow-sm transition"
                     />
                   </div>
+                </div>
+                <div className="col-span-3">
+                  <input
+                    type="tel"
+                    placeholder="📲 Celular / WhatsApp (ej: 51987654321)"
+                    value={clienteTelefono}
+                    onChange={(e) => setClienteTelefono(e.target.value)}
+                    className="w-full bg-emerald-50/50 border border-emerald-300 rounded-xl p-3 text-sm font-bold text-slate-900 focus:border-emerald-500 outline-none shadow-sm transition"
+                  />
                 </div>
               </div>
 
@@ -817,7 +931,83 @@ export default function CajaRegistradora() {
         </div>
       )}
 
+      {/* Modal Ítem Libre / Servicio */}
+      {customModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl border border-slate-200">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
+                <PlusCircle className="text-indigo-600" size={22} />
+                Agregar Servicio / Ítem Libre
+              </h3>
+              <button onClick={() => setCustomModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 rounded-full cursor-pointer">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <p className="text-xs text-slate-500 mb-4">
+              Ingresa cualquier producto o servicio fuera del catálogo (ej: Delivery, Empaque de Regalo). No afecta el stock de la base de datos.
+            </p>
 
+            <form onSubmit={handleGuardarItemPersonalizado} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Nombre del Servicio / Ítem</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ej: Servicio de Delivery / Envío"
+                  value={customNombre}
+                  onChange={(e) => setCustomNombre(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 text-sm font-medium text-slate-800 focus:border-indigo-500 outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Precio Unit. (S/)</label>
+                  <input
+                    type="number"
+                    step="0.10"
+                    min="0"
+                    required
+                    placeholder="0.00"
+                    value={customPrecio}
+                    onChange={(e) => setCustomPrecio(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 text-lg font-black text-slate-800 focus:border-indigo-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad</label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    value={customCantidad}
+                    onChange={(e) => setCustomCantidad(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 text-lg font-black text-slate-800 focus:border-indigo-500 outline-none text-center"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setCustomModalOpen(false)}
+                  className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition shadow-md shadow-indigo-600/20 cursor-pointer"
+                >
+                  Agregar a Cesta
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
     </div>
   );

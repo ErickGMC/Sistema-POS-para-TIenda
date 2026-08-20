@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Globe, Save, Plus, Edit2, Trash2, Check, AlertCircle, RefreshCw, Image as ImageIcon, Sparkles, Bot, Zap, Cpu } from 'lucide-react';
+import { Globe, Save, Plus, Edit2, Trash2, Check, AlertCircle, RefreshCw, Image as ImageIcon, Sparkles, Bot, Zap, Cpu, Loader2 } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 
 interface Banner {
@@ -91,7 +91,6 @@ export default function WebAdmin() {
   const [originalComunidad, setOriginalComunidad] = useState<ComunidadConfig | null>(null);
 
   const [banners, setBanners] = useState<Banner[]>([]);
-  const [, setAnalyticsData] = useState<any[]>([]);
   
   // Estado del formulario de Banner
   const [isEditingBanner, setIsEditingBanner] = useState(false);
@@ -164,15 +163,6 @@ export default function WebAdmin() {
       const bannersRes = await (window as any).electron.obtenerBanners();
       if (bannersRes.success) {
         setBanners(bannersRes.banners || []);
-      }
-      
-      try {
-        const analyticsRes = await (window as any).electron.obtenerAnalytics();
-        if (analyticsRes && analyticsRes.success) {
-          setAnalyticsData(analyticsRes.events || []);
-        }
-      } catch (err) {
-        console.warn('Analytics no disponibles aún:', err);
       }
     } catch (err) {
       console.error('Error cargando datos web:', err);
@@ -451,6 +441,35 @@ export default function WebAdmin() {
       } finally {
         setIsLoading(false);
       }
+    }
+  };
+
+  const [isCleaningStorage, setIsCleaningStorage] = useState(false);
+
+  const handleLimpiarStorage = async () => {
+    const confirmado = await useUIStore.getState().showConfirm(
+      '¿Deseas analizar y eliminar de Firebase Storage todas las imágenes antiguas o huérfanas que ya no están asociadas a ningún producto ni banner?',
+      'Limpiar Almacenamiento en la Nube'
+    );
+    if (!confirmado) return;
+
+    setIsCleaningStorage(true);
+    try {
+      const res = await (window as any).electron.limpiarArchivosHuerfanos();
+      if (res.success) {
+        if (res.totalEliminados > 0) {
+          mostrarMensaje(`🧹 Limpieza completada: Se eliminaron ${res.totalEliminados} imágenes huérfanas de Storage.`);
+        } else {
+          mostrarMensaje(`✨ Almacenamiento optimizado: Los ${res.totalAnalizados} archivos analizados están en uso activo.`);
+        }
+      } else {
+        mostrarMensaje(`Error al limpiar almacenamiento: ${res.error}`, 'error');
+      }
+    } catch (err: any) {
+      console.error('Error al limpiar storage:', err);
+      mostrarMensaje('Error al conectar con el servicio de almacenamiento', 'error');
+    } finally {
+      setIsCleaningStorage(false);
     }
   };
 
@@ -1285,6 +1304,20 @@ export default function WebAdmin() {
             <h1 className="text-3xl font-black text-slate-900">Banners Activos</h1>
             <p className="text-sm text-slate-600 mt-1">Carrusel de imágenes que se muestran en el Hero de la tienda web.</p>
           </div>
+          <button
+            type="button"
+            onClick={handleLimpiarStorage}
+            disabled={isCleaningStorage || isLoading}
+            className="flex items-center gap-2 px-3.5 py-2 bg-white hover:bg-slate-50 active:bg-slate-100 border border-slate-300 hover:border-slate-400 text-slate-700 font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed group"
+            title="Audita y elimina imágenes antiguas o huérfanas de Firebase Storage que ya no están en uso"
+          >
+            {isCleaningStorage ? (
+              <Loader2 size={15} className="animate-spin text-emerald-600" />
+            ) : (
+              <Trash2 size={15} className="text-slate-400 group-hover:text-rose-600 transition-colors" />
+            )}
+            <span>{isCleaningStorage ? 'Limpiando...' : 'Limpiar Storage'}</span>
+          </button>
         </div>
 
         <div className="flex-1 overflow-auto custom-scrollbar-light-light-light bg-slate-100 rounded-xl border border-slate-300 p-4">
@@ -1303,12 +1336,23 @@ export default function WebAdmin() {
                   }`}
                 >
                   {/* Banner Image Preview */}
-                  <div className="relative h-36 bg-slate-50 flex items-center justify-center overflow-hidden">
-                    <img src={banner.imageUrl || undefined} alt={banner.title} className="w-full h-full object-cover" />
+                  <div className="relative h-36 bg-slate-100 flex items-center justify-center overflow-hidden">
+                    {(banner.imagenLocal || banner.imageUrl) ? (
+                      <img 
+                        src={banner.imagenLocal || banner.imageUrl || ''} 
+                        alt={banner.title || 'Banner'} 
+                        className="w-full h-full object-cover" 
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center text-slate-400">
+                        <ImageIcon size={32} className="opacity-40 mb-1" />
+                        <span className="text-xs">Sin imagen</span>
+                      </div>
+                    )}
                     
                     {/* Badge */}
                     {banner.badgeText && (
-                      <span className="absolute top-2 left-2 px-2.5 py-0.5 bg-white/20 backdrop-blur-md text-slate-900 border border-white/20 text-[10px] rounded-full font-semibold">
+                      <span className="absolute top-2 left-2 px-2.5 py-0.5 bg-emerald-600 text-white shadow-sm text-[10px] rounded-full font-bold">
                         {banner.badgeText}
                       </span>
                     )}
@@ -1316,12 +1360,12 @@ export default function WebAdmin() {
                     {/* Sync indicator */}
                     <div className="absolute top-2 right-2 flex flex-col gap-1 items-end">
                       {banner.pendienteSync && banner.pendienteSync > 0 ? (
-                        <span className="text-amber-600 bg-amber-400/10 px-2 py-0.5 rounded text-[10px] w-fit font-semibold border border-amber-400/20 animate-pulse">
+                        <span className="text-amber-700 bg-amber-100 px-2 py-0.5 rounded text-[10px] w-fit font-bold border border-amber-300 animate-pulse shadow-sm">
                           ☁ Pendiente
                         </span>
                       ) : (
-                        <span className="text-blue-600 bg-blue-400/10 px-2 py-0.5 rounded text-[10px] w-fit font-semibold border border-blue-400/20">
-                          ☁ Nube
+                        <span className="text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded text-[10px] w-fit font-bold border border-emerald-300 shadow-sm">
+                          ☁ Sincronizado
                         </span>
                       )}
                     </div>
@@ -1330,18 +1374,22 @@ export default function WebAdmin() {
                   {/* Banner Details */}
                   <div className="p-4 flex-1 flex flex-col justify-between">
                     <div>
-                      <h4 className="font-bold text-slate-900 text-lg line-clamp-1">{banner.title}</h4>
-                      <p className="text-slate-600 text-xs mt-1 line-clamp-2">{banner.subtitle || 'Sin subtítulo'}</p>
+                      <h4 className="font-bold text-slate-900 text-base line-clamp-1">
+                        {banner.title && banner.title.trim() !== '' ? banner.title : (banner.ctaActionCategory && banner.ctaActionCategory !== 'Todas' ? `Banner: ${banner.ctaActionCategory}` : 'Banner Promocional')}
+                      </h4>
+                      <p className="text-slate-500 text-xs mt-1 line-clamp-2">
+                        {banner.subtitle && banner.subtitle.trim() !== '' ? banner.subtitle : (banner.badgeText ? `Tag: ${banner.badgeText}` : 'Diseño promocional activo en el carrusel web')}
+                      </p>
                       
                       <div className="flex gap-2 flex-wrap mt-3">
                         <span className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded font-medium border border-slate-300">
-                          CTA: {banner.ctaText}
+                          Botón: {banner.ctaText || 'Ver más'}
+                        </span>
+                        <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded font-medium border border-emerald-200">
+                          Destino: {banner.ctaActionCategory || 'Todas'}
                         </span>
                         <span className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded font-medium border border-slate-300">
-                          Ir a: {banner.ctaActionCategory || 'Todas'}
-                        </span>
-                        <span className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded font-medium border border-slate-300">
-                          Prioridad: {banner.priority}
+                          Orden: {banner.priority ?? 0}
                         </span>
                       </div>
                     </div>

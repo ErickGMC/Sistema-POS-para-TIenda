@@ -1,6 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import type { Producto } from '../../store/usePosStore';
-import { Edit2, Trash2, Image as ImageIcon, Check, X, Search, AlertCircle, CheckCircle } from 'lucide-react';
+import { 
+  Edit2, Trash2, Image as ImageIcon, Check, X, Search, AlertCircle, CheckCircle,
+  ArrowUpDown, ArrowUp, ArrowDown, Package, AlertTriangle, Layers, DollarSign, RotateCcw
+} from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import ListaCompras from './ListaCompras';
 
@@ -25,6 +28,11 @@ function traducirError(error: string): string {
 export default function Inventario() {
   const [productos, setProductos] = useState<Producto[]>([]);
   const [busqueda, setBusqueda] = useState('');
+  const [categoriaFiltro, setCategoriaFiltro] = useState<string>('TODAS');
+  const [stockFiltro, setStockFiltro] = useState<'TODOS' | 'EN_STOCK' | 'BAJO' | 'SIN_STOCK'>('TODOS');
+  const [ordenarPor, setOrdenarPor] = useState<
+    'nombre_asc' | 'nombre_desc' | 'categoria_asc' | 'categoria_desc' | 'precio_asc' | 'precio_desc' | 'stock_asc' | 'stock_desc'
+  >('nombre_asc');
   const [activeTab, setActiveTab] = useState<'gestion' | 'compras'>('gestion');
   
   // Estado del Formulario
@@ -206,11 +214,79 @@ export default function Inventario() {
     }
   };
 
-  const filteredProductos = productos.filter(p => 
-    p.nombre?.toLowerCase().includes(busqueda.toLowerCase()) || 
-    p.descripcion?.toLowerCase().includes(busqueda.toLowerCase()) || 
-    p.codigoBarras?.includes(busqueda)
-  );
+  const categoriasDisponibles = useMemo(() => {
+    return ['TODAS', ...Array.from(new Set(productos.map(p => p.categoria).filter(Boolean))).sort()];
+  }, [productos]);
+
+  const totalRegistrados = productos.length;
+  const totalStockBajo = useMemo(() => productos.filter(p => (p.stock || 0) < 10 && (p.stock || 0) > 0).length, [productos]);
+  const totalSinStock = useMemo(() => productos.filter(p => (p.stock || 0) <= 0).length, [productos]);
+  const valorTotalInventario = useMemo(() => productos.reduce((acc, p) => acc + ((p.precio || 0) * (p.stock || 0)), 0), [productos]);
+
+  const filteredProductos = useMemo(() => {
+    const term = busqueda.trim().toLowerCase();
+    const list = productos.filter(p => {
+      const matchText = !term || (
+        (p.nombre || '').toLowerCase().includes(term) || 
+        (p.descripcion || '').toLowerCase().includes(term) || 
+        (p.codigoBarras || '').toLowerCase().includes(term)
+      );
+      const matchCat = categoriaFiltro === 'TODAS' || p.categoria === categoriaFiltro;
+      const matchStock = 
+        stockFiltro === 'TODOS' ? true :
+        stockFiltro === 'BAJO' ? (p.stock || 0) < 10 && (p.stock || 0) > 0 :
+        stockFiltro === 'SIN_STOCK' ? (p.stock || 0) <= 0 :
+        (p.stock || 0) >= 10;
+      
+      return matchText && matchCat && matchStock;
+    });
+
+    list.sort((a, b) => {
+      switch (ordenarPor) {
+        case 'nombre_asc':
+          return (a.nombre || '').localeCompare(b.nombre || '');
+        case 'nombre_desc':
+          return (b.nombre || '').localeCompare(a.nombre || '');
+        case 'categoria_asc':
+          return (a.categoria || '').localeCompare(b.categoria || '') || (a.nombre || '').localeCompare(b.nombre || '');
+        case 'categoria_desc':
+          return (b.categoria || '').localeCompare(a.categoria || '') || (a.nombre || '').localeCompare(b.nombre || '');
+        case 'precio_asc':
+          return (a.precio || 0) - (b.precio || 0);
+        case 'precio_desc':
+          return (b.precio || 0) - (a.precio || 0);
+        case 'stock_asc':
+          return (a.stock || 0) - (b.stock || 0);
+        case 'stock_desc':
+          return (b.stock || 0) - (a.stock || 0);
+        default:
+          return (a.nombre || '').localeCompare(b.nombre || '');
+      }
+    });
+
+    return list;
+  }, [productos, busqueda, categoriaFiltro, stockFiltro, ordenarPor]);
+
+  const handleSortColumn = (col: 'nombre' | 'categoria' | 'precio' | 'stock') => {
+    if (col === 'nombre') {
+      setOrdenarPor(prev => prev === 'nombre_asc' ? 'nombre_desc' : 'nombre_asc');
+    } else if (col === 'categoria') {
+      setOrdenarPor(prev => prev === 'categoria_asc' ? 'categoria_desc' : 'categoria_asc');
+    } else if (col === 'precio') {
+      setOrdenarPor(prev => prev === 'precio_asc' ? 'precio_desc' : 'precio_asc');
+    } else if (col === 'stock') {
+      setOrdenarPor(prev => prev === 'stock_asc' ? 'stock_desc' : 'stock_asc');
+    }
+  };
+
+  const resetFilters = () => {
+    setBusqueda('');
+    setCategoriaFiltro('TODAS');
+    setStockFiltro('TODOS');
+    setOrdenarPor('nombre_asc');
+  };
+
+  const isFilterActive = busqueda !== '' || categoriaFiltro !== 'TODAS' || stockFiltro !== 'TODOS' || ordenarPor !== 'nombre_asc';
 
   const isValid = Boolean(
     form.nombre && form.nombre.trim() !== '' && 
@@ -414,28 +490,208 @@ export default function Inventario() {
       </div>
 
       {/* Panel Derecho: Grilla de Productos */}
-      <div className="flex-1 flex flex-col p-5 overflow-hidden">
-        <div className="flex justify-end items-center mb-4">
-          <div className="relative w-64">
-            <Search className="absolute left-3 top-2.5 text-slate-600" size={18} />
-            <input 
-              type="text" 
-              placeholder="Buscar producto..." 
-              value={busqueda}
-              onChange={e => setBusqueda(e.target.value)}
-              className="w-full bg-white border border-slate-350 hover:border-slate-400 shadow-sm rounded-full pl-9 pr-4 py-2 text-sm text-slate-900 focus:border-emerald-500 outline-none transition" 
-            />
+      <div className="flex-1 flex flex-col p-5 overflow-hidden bg-slate-50">
+        {/* Barra Superior: Métricas y Contadores */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4 flex-shrink-0">
+          <div className="bg-white p-3 rounded-xl border border-slate-250 shadow-xs flex items-center gap-3">
+            <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-lg">
+              <Package size={20} />
+            </div>
+            <div>
+              <div className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">Total Productos</div>
+              <div className="text-lg font-black text-slate-900 leading-tight">
+                {totalRegistrados} <span className="text-xs font-normal text-slate-500">items</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white p-3 rounded-xl border border-slate-250 shadow-xs flex items-center gap-3">
+            <div className="p-2.5 bg-blue-50 text-blue-600 rounded-lg">
+              <DollarSign size={20} />
+            </div>
+            <div>
+              <div className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">Valorización Total</div>
+              <div className="text-lg font-black text-emerald-600 leading-tight">
+                S/ {valorTotalInventario.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white p-3 rounded-xl border border-slate-250 shadow-xs flex items-center gap-3">
+            <div className={`p-2.5 rounded-lg ${totalStockBajo + totalSinStock > 0 ? 'bg-amber-50 text-amber-600' : 'bg-slate-50 text-slate-400'}`}>
+              <AlertTriangle size={20} />
+            </div>
+            <div>
+              <div className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">Stock Crítico</div>
+              <div className={`text-lg font-black leading-tight ${totalStockBajo + totalSinStock > 0 ? 'text-amber-600' : 'text-slate-700'}`}>
+                {totalStockBajo + totalSinStock} <span className="text-xs font-normal text-slate-500">({totalSinStock} agotados)</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white p-3 rounded-xl border border-slate-250 shadow-xs flex items-center gap-3">
+            <div className="p-2.5 bg-purple-50 text-purple-600 rounded-lg">
+              <Layers size={20} />
+            </div>
+            <div>
+              <div className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">Mostrando</div>
+              <div className="text-lg font-black text-slate-900 leading-tight">
+                {filteredProductos.length} <span className="text-xs font-normal text-slate-500">de {totalRegistrados}</span>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto custom-scrollbar-light-light-light bg-slate-100 rounded-xl border border-slate-300">
+        {/* Barra de Filtros y Ordenamiento Profesional */}
+        <div className="bg-white p-3 rounded-xl border border-slate-250 shadow-xs mb-3 flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
+          {/* Buscador reactivo */}
+          <div className="relative flex-1 min-w-[200px] max-w-sm">
+            <Search className="absolute left-3 top-2.5 text-slate-400" size={16} />
+            <input 
+              type="text" 
+              placeholder="Buscar por nombre, código o descripción..." 
+              value={busqueda}
+              onChange={e => setBusqueda(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-300 hover:border-slate-400 focus:bg-white rounded-lg pl-9 pr-8 py-1.5 text-xs text-slate-900 focus:border-emerald-500 outline-none transition" 
+            />
+            {busqueda && (
+              <button 
+                onClick={() => setBusqueda('')} 
+                className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                title="Limpiar búsqueda"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          {/* Filtros Dropdowns y Selects */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Filtro Categoría */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-500">Cat:</span>
+              <select
+                value={categoriaFiltro}
+                onChange={e => setCategoriaFiltro(e.target.value)}
+                className="bg-slate-50 border border-slate-300 hover:border-slate-400 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-800 focus:border-emerald-500 outline-none cursor-pointer"
+              >
+                <option value="TODAS">Todas las Categorías ({totalRegistrados})</option>
+                {categoriasDisponibles.filter(c => c !== 'TODAS').map(cat => (
+                  <option key={cat} value={cat}>
+                    {cat} ({productos.filter(p => p.categoria === cat).length})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Filtro Stock */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-500">Stock:</span>
+              <select
+                value={stockFiltro}
+                onChange={e => setStockFiltro(e.target.value as any)}
+                className="bg-slate-50 border border-slate-300 hover:border-slate-400 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-800 focus:border-emerald-500 outline-none cursor-pointer"
+              >
+                <option value="TODOS">Todos los Stocks</option>
+                <option value="EN_STOCK">Stock Normal (≥10)</option>
+                <option value="BAJO">Stock Bajo (&lt;10)</option>
+                <option value="SIN_STOCK">Agotados (0)</option>
+              </select>
+            </div>
+
+            {/* Selector de Ordenamiento */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-500">Ordenar:</span>
+              <select
+                value={ordenarPor}
+                onChange={e => setOrdenarPor(e.target.value as any)}
+                className="bg-slate-50 border border-slate-300 hover:border-slate-400 rounded-lg px-2.5 py-1.5 text-xs font-bold text-emerald-700 focus:border-emerald-500 outline-none cursor-pointer"
+              >
+                <option value="nombre_asc">Nombre (A - Z)</option>
+                <option value="nombre_desc">Nombre (Z - A)</option>
+                <option value="categoria_asc">Categoría (A - Z)</option>
+                <option value="stock_asc">Stock: Menor a Mayor</option>
+                <option value="stock_desc">Stock: Mayor a Menor</option>
+                <option value="precio_asc">Precio: Menor a Mayor</option>
+                <option value="precio_desc">Precio: Mayor a Menor</option>
+              </select>
+            </div>
+
+            {/* Botón Reset */}
+            {isFilterActive && (
+              <button
+                onClick={resetFilters}
+                className="flex items-center gap-1 px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold transition cursor-pointer"
+                title="Restablecer todos los filtros"
+              >
+                <RotateCcw size={12} />
+                <span>Restablecer</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Tabla de Productos con Cabeceras Clickeables */}
+        <div className="flex-1 overflow-auto custom-scrollbar-light-light-light bg-white rounded-xl border border-slate-300 shadow-xs">
           <table className="w-full text-left border-collapse">
-            <thead className="bg-slate-200 sticky top-0 backdrop-blur-md border-b-2 border-slate-350 z-10">
+            <thead className="bg-slate-150 sticky top-0 backdrop-blur-md border-b-2 border-slate-300 z-10">
               <tr>
-                <th className="py-2.5 px-3 text-slate-800 font-extrabold text-[11px] uppercase tracking-wider">Producto</th>
-                <th className="py-2.5 px-3 text-slate-800 font-extrabold text-[11px] uppercase tracking-wider">Categoría</th>
-                <th className="py-2.5 px-3 text-slate-800 font-extrabold text-[11px] uppercase tracking-wider">Precio</th>
-                <th className="py-2.5 px-3 text-slate-800 font-extrabold text-[11px] uppercase tracking-wider">Stock</th>
+                {/* Columna Producto Clickeable */}
+                <th 
+                  onClick={() => handleSortColumn('nombre')}
+                  className="py-2.5 px-3 text-slate-800 font-extrabold text-[11px] uppercase tracking-wider cursor-pointer hover:bg-slate-200 transition select-none"
+                  title="Clic para ordenar por Producto"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Producto</span>
+                    {ordenarPor === 'nombre_asc' && <ArrowUp size={13} className="text-emerald-600" />}
+                    {ordenarPor === 'nombre_desc' && <ArrowDown size={13} className="text-emerald-600" />}
+                    {ordenarPor !== 'nombre_asc' && ordenarPor !== 'nombre_desc' && <ArrowUpDown size={12} className="text-slate-400 opacity-60" />}
+                  </div>
+                </th>
+
+                {/* Columna Categoría Clickeable */}
+                <th 
+                  onClick={() => handleSortColumn('categoria')}
+                  className="py-2.5 px-3 text-slate-800 font-extrabold text-[11px] uppercase tracking-wider cursor-pointer hover:bg-slate-200 transition select-none"
+                  title="Clic para ordenar por Categoría"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Categoría</span>
+                    {ordenarPor === 'categoria_asc' && <ArrowUp size={13} className="text-emerald-600" />}
+                    {ordenarPor === 'categoria_desc' && <ArrowDown size={13} className="text-emerald-600" />}
+                    {ordenarPor !== 'categoria_asc' && ordenarPor !== 'categoria_desc' && <ArrowUpDown size={12} className="text-slate-400 opacity-60" />}
+                  </div>
+                </th>
+
+                {/* Columna Precio Clickeable */}
+                <th 
+                  onClick={() => handleSortColumn('precio')}
+                  className="py-2.5 px-3 text-slate-800 font-extrabold text-[11px] uppercase tracking-wider cursor-pointer hover:bg-slate-200 transition select-none"
+                  title="Clic para ordenar por Precio"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Precio</span>
+                    {ordenarPor === 'precio_asc' && <ArrowUp size={13} className="text-emerald-600" />}
+                    {ordenarPor === 'precio_desc' && <ArrowDown size={13} className="text-emerald-600" />}
+                    {ordenarPor !== 'precio_asc' && ordenarPor !== 'precio_desc' && <ArrowUpDown size={12} className="text-slate-400 opacity-60" />}
+                  </div>
+                </th>
+
+                {/* Columna Stock Clickeable */}
+                <th 
+                  onClick={() => handleSortColumn('stock')}
+                  className="py-2.5 px-3 text-slate-800 font-extrabold text-[11px] uppercase tracking-wider cursor-pointer hover:bg-slate-200 transition select-none"
+                  title="Clic para ordenar por Stock"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Stock</span>
+                    {ordenarPor === 'stock_asc' && <ArrowUp size={13} className="text-emerald-600" />}
+                    {ordenarPor === 'stock_desc' && <ArrowDown size={13} className="text-emerald-600" />}
+                    {ordenarPor !== 'stock_asc' && ordenarPor !== 'stock_desc' && <ArrowUpDown size={12} className="text-slate-400 opacity-60" />}
+                  </div>
+                </th>
+
                 <th className="py-2.5 px-3 text-slate-800 font-extrabold text-[11px] uppercase tracking-wider">Sincronización</th>
                 <th className="py-2.5 px-3 text-slate-800 font-extrabold text-[11px] uppercase tracking-wider">Web</th>
                 <th className="py-2.5 px-3 text-right text-slate-800 font-extrabold text-[11px] uppercase tracking-wider">Acciones</th>
@@ -443,64 +699,75 @@ export default function Inventario() {
             </thead>
             <tbody>
               {filteredProductos.map((prod) => (
-                <tr key={prod.id} className="border-b border-slate-300 hover:bg-slate-100 transition group even:bg-white odd:bg-slate-50/70">
-                  <td className="py-1.5 px-3">
-                    <div className="flex items-center gap-2.5">
-                      {prod.imagenLocal || prod.imagenUrl ? (
-                        <img src={prod.imagenLocal || prod.imagenUrl} alt={prod.nombre} className="w-8 h-8 rounded object-cover bg-white border border-slate-200" />
-                      ) : (
-                        <div className="w-8 h-8 rounded bg-slate-200 flex items-center justify-center text-slate-400 border border-slate-200"><ImageIcon size={16}/></div>
-                      )}
-                      <div>
-                        <div className="font-semibold text-slate-800 text-sm leading-tight">{prod.nombre}</div>
-                        <div className="text-xs text-slate-500 font-mono mt-0.5">{prod.codigoBarras || 'S/C'}</div>
+                <tr key={prod.id} className="border-b border-slate-200 hover:bg-slate-50 transition group even:bg-white odd:bg-slate-50/50">
+                  <td className="py-2 px-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-white border border-slate-250 p-0.5 flex-shrink-0 flex items-center justify-center overflow-hidden shadow-2xs">
+                        {prod.imagenLocal || prod.imagenUrl ? (
+                          <img src={prod.imagenLocal || prod.imagenUrl} alt={prod.nombre} className="w-full h-full object-contain" />
+                        ) : (
+                          <ImageIcon size={18} className="text-slate-400 opacity-60" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-bold text-slate-850 text-sm leading-tight">{prod.nombre}</div>
+                        <div className="text-[11px] text-slate-500 font-mono mt-0.5">{prod.codigoBarras || 'S/C'}</div>
                       </div>
                     </div>
                   </td>
-                  <td className="py-1.5 px-3 text-slate-600 text-sm font-medium">{prod.categoria}</td>
-                  <td className="py-1.5 px-3 font-semibold text-emerald-600 text-sm">S/ {prod.precio.toFixed(2)}</td>
-                  <td className="py-1.5 px-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${
-                      prod.stock < 10 
-                        ? 'bg-amber-50 border-amber-200 text-amber-700' 
-                        : 'bg-slate-50 border-slate-200 text-slate-700'
+                  <td className="py-2 px-3">
+                    <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md text-xs font-semibold border border-slate-200">
+                      {prod.categoria}
+                    </span>
+                  </td>
+                  <td className="py-2 px-3 font-black text-emerald-600 text-sm">
+                    S/ {prod.precio.toFixed(2)}
+                  </td>
+                  <td className="py-2 px-3">
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold border inline-flex items-center gap-1 ${
+                      prod.stock <= 0 
+                        ? 'bg-rose-50 border-rose-200 text-rose-700 font-extrabold'
+                        : prod.stock < 10 
+                          ? 'bg-amber-50 border-amber-200 text-amber-700 font-bold' 
+                          : 'bg-emerald-50 border-emerald-200 text-emerald-700'
                     }`}>
+                      {prod.stock <= 0 && <AlertCircle size={11} />}
                       {prod.stock} {prod.unidadMedida}
                     </span>
                   </td>
-                  <td className="py-1.5 px-3">
+                  <td className="py-2 px-3">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded text-[11px] font-bold border border-emerald-200 flex items-center gap-1 flex-shrink-0">
+                      <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] font-bold border border-emerald-200 flex items-center gap-1 flex-shrink-0">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Local
                       </span>
                       {(prod as any).pendienteSync > 0 ? (
-                        <span className="text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded text-[11px] font-bold border border-amber-200 animate-pulse flex items-center gap-1 flex-shrink-0">
+                        <span className="text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded text-[10px] font-bold border border-amber-200 animate-pulse flex items-center gap-1 flex-shrink-0">
                           <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span> Pendiente
                         </span>
                       ) : (
-                        <span className="text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded text-[11px] font-bold border border-blue-200 flex items-center gap-1 flex-shrink-0">
+                        <span className="text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-200 flex items-center gap-1 flex-shrink-0">
                           <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span> Nube
                         </span>
                       )}
                     </div>
                   </td>
-                  <td className="py-1.5 px-3">
+                  <td className="py-2 px-3">
                     {prod.disponible 
-                      ? <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-xs font-semibold border border-emerald-200">Visible</span>
-                      : <span className="text-slate-500 bg-slate-50 px-2 py-0.5 rounded-full text-xs font-semibold border border-slate-200">Oculto</span>}
+                      ? <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-[11px] font-semibold border border-emerald-200">Visible</span>
+                      : <span className="text-slate-500 bg-slate-50 px-2 py-0.5 rounded-full text-[11px] font-semibold border border-slate-200">Oculto</span>}
                   </td>
-                  <td className="py-1.5 px-3">
+                  <td className="py-2 px-3">
                     <div className="flex items-center justify-end gap-2">
                       <button 
                         onClick={() => handleEdit(prod)} 
-                        className="p-1.5 text-blue-600 bg-blue-50 hover:bg-blue-100 hover:text-blue-700 active:bg-blue-200 rounded-lg transition-colors border border-blue-200 flex items-center justify-center cursor-pointer shadow-sm"
+                        className="p-1.5 text-blue-600 bg-blue-50 hover:bg-blue-100 hover:text-blue-700 active:bg-blue-200 rounded-lg transition-colors border border-blue-200 flex items-center justify-center cursor-pointer shadow-2xs"
                         title="Editar producto"
                       >
                         <Edit2 size={14} />
                       </button>
                       <button 
                         onClick={() => handleDelete(prod.id)} 
-                        className="p-1.5 text-rose-600 bg-rose-50 hover:bg-rose-100 hover:text-rose-700 active:bg-rose-200 rounded-lg transition-colors border border-rose-200 flex items-center justify-center cursor-pointer shadow-sm"
+                        className="p-1.5 text-rose-600 bg-rose-50 hover:bg-rose-100 hover:text-rose-700 active:bg-rose-200 rounded-lg transition-colors border border-rose-200 flex items-center justify-center cursor-pointer shadow-2xs"
                         title="Eliminar producto"
                       >
                         <Trash2 size={14} />
@@ -512,7 +779,18 @@ export default function Inventario() {
             </tbody>
           </table>
           {filteredProductos.length === 0 && (
-            <div className="p-8 text-center text-slate-500 italic text-sm">No se encontraron productos.</div>
+            <div className="p-10 text-center text-slate-500 italic text-sm flex flex-col items-center justify-center">
+              <Package size={36} className="opacity-25 mb-2 text-slate-400" />
+              <span>No se encontraron productos con los filtros seleccionados.</span>
+              {isFilterActive && (
+                <button
+                  onClick={resetFilters}
+                  className="mt-3 text-xs text-emerald-600 font-bold hover:underline"
+                >
+                  Limpiar filtros
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>

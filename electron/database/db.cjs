@@ -47,18 +47,22 @@ const migrations = [
         db.exec("CREATE TABLE IF NOT EXISTS correlativos (serie TEXT PRIMARY KEY, siguiente_numero INTEGER DEFAULT 1)");
         db.exec("INSERT OR IGNORE INTO correlativos (serie, siguiente_numero) VALUES ('B001', 1)");
     },
-    // Version 6
+    // Version 6 (Deprecada: analytics_events eliminada)
     () => {
-        db.exec(`CREATE TABLE IF NOT EXISTS analytics_events (
-            id TEXT PRIMARY KEY,
-            type TEXT NOT NULL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            data TEXT
-        )`);
+        db.exec("DROP TABLE IF EXISTS analytics_events");
     },
     // Version 7
     () => {
         db.exec("ALTER TABLE ventas ADD COLUMN anulado INTEGER DEFAULT 0");
+    },
+    // Version 8 — Índice compuesto para UPSERT eficiente en sync_queue
+    () => {
+        db.exec("CREATE INDEX IF NOT EXISTS idx_sync_queue_entidad_estado ON sync_queue(entidad, entidad_id, estado_sync)");
+    },
+    // Version 9 — Columna email e índice en usuarios para login con correo
+    () => {
+        db.exec("ALTER TABLE usuarios ADD COLUMN email TEXT");
+        db.exec("CREATE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email)");
     }
 ];
 
@@ -125,9 +129,9 @@ function crearProducto(producto, isFromSync = false) {
             nombre: producto.nombre || '',
             descripcion: producto.descripcion || null,
             categoria: producto.categoria || 'Abarrotes',
-            precio: producto.precio !== undefined ? producto.precio : 0,
-            costo: producto.costo !== undefined ? producto.costo : null,
-            stock: producto.stock !== undefined ? producto.stock : 0,
+            precio: Number(producto.precio ?? 0),
+            costo: producto.costo !== undefined && producto.costo !== null ? Number(producto.costo) : null,
+            stock: Number(producto.stock ?? 0),
             unidadMedida: producto.unidadMedida || 'unidad',
             imagenUrl: producto.imagenUrl || null,
             thumbnailUrl: producto.thumbnailUrl || null,
@@ -140,14 +144,16 @@ function crearProducto(producto, isFromSync = false) {
         
         stmt.run(data);
         
-        // Agregar a Sync Queue solo si no viene de Firestore
+        // Agregar a Sync Queue solo si no viene de Firestore.
+        // Normalizar disponible/destacado a booleanos en el payload de Firebase.
         if (!isFromSync) {
+            const syncData = { ...data, disponible: Boolean(data.disponible), destacado: Boolean(data.destacado) };
             db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
-                'producto', data.id, 'INSERT', JSON.stringify(data)
+                'producto', data.id, 'INSERT', JSON.stringify(syncData)
             );
         }
         
-        return { success: true };
+        return { success: true, id: data.id };
     } catch (err) {
         return { success: false, error: err.message };
     }
@@ -159,7 +165,8 @@ function actualizarProducto(producto, isFromSync = false) {
             UPDATE productos 
             SET codigoBarras = @codigoBarras, nombre = @nombre, descripcion = @descripcion, 
                 categoria = @categoria, precio = @precio, costo = @costo, stock = @stock, 
-                unidadMedida = @unidadMedida, imagenUrl = @imagenUrl, thumbnailUrl = @thumbnailUrl, imagenLocal = @imagenLocal, thumbnailLocal = @thumbnailLocal, disponible = @disponible, 
+                unidadMedida = @unidadMedida, imagenUrl = @imagenUrl, thumbnailUrl = @thumbnailUrl, 
+                imagenLocal = @imagenLocal, thumbnailLocal = @thumbnailLocal, disponible = @disponible, 
                 destacado = @destacado, etiquetas = @etiquetas
             WHERE id = @id
         `);
@@ -170,9 +177,9 @@ function actualizarProducto(producto, isFromSync = false) {
             nombre: producto.nombre || '',
             descripcion: producto.descripcion || null,
             categoria: producto.categoria || 'Abarrotes',
-            precio: producto.precio !== undefined ? producto.precio : 0,
-            costo: producto.costo !== undefined ? producto.costo : null,
-            stock: producto.stock !== undefined ? producto.stock : 0,
+            precio: Number(producto.precio ?? 0),
+            costo: producto.costo !== undefined && producto.costo !== null ? Number(producto.costo) : null,
+            stock: Number(producto.stock ?? 0),
             unidadMedida: producto.unidadMedida || 'unidad',
             imagenUrl: producto.imagenUrl || null,
             thumbnailUrl: producto.thumbnailUrl || null,
@@ -186,11 +193,25 @@ function actualizarProducto(producto, isFromSync = false) {
         const info = stmt.run(data);
         
         if (info.changes > 0) {
-            // Agregar a Sync Queue solo si no viene de Firestore
+            // Agregar a Sync Queue solo si no viene de Firestore.
+            // UPSERT: si ya existe una entrada pendiente para este producto, actualizarla
+            // en lugar de insertar otra — evita múltiples writes a Firestore por la misma entidad.
             if (!isFromSync) {
-                db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
-                    'producto', data.id, 'UPDATE', JSON.stringify(data)
-                );
+                const syncData = { ...data, disponible: Boolean(data.disponible), destacado: Boolean(data.destacado) };
+                const syncPayload = JSON.stringify(syncData);
+                const existing = db.prepare(
+                    "SELECT id FROM sync_queue WHERE entidad = 'producto' AND entidad_id = ? AND estado_sync = 0 ORDER BY fecha_creacion DESC LIMIT 1"
+                ).get(data.id);
+                if (existing) {
+                    // Actualizar la entrada pendiente existente con los datos más recientes
+                    db.prepare(
+                        "UPDATE sync_queue SET operacion = 'UPDATE', datos_json = ?, fecha_creacion = CURRENT_TIMESTAMP, intentos = 0 WHERE id = ?"
+                    ).run(syncPayload, existing.id);
+                } else {
+                    db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
+                        'producto', data.id, 'UPDATE', syncPayload
+                    );
+                }
             }
             return { success: true };
         } else {
@@ -240,9 +261,10 @@ function verifyPassword(password, hash, salt) {
     return verifyHash === hash;
 }
 
-function login(username, password) {
-    const user = db.prepare('SELECT * FROM usuarios WHERE username = ?').get(username);
-    if (!user) return { success: false, error: 'Usuario incorrecto' };
+function login(identifier, password) {
+    const term = (identifier || '').trim();
+    const user = db.prepare('SELECT * FROM usuarios WHERE LOWER(username) = LOWER(?) OR (email IS NOT NULL AND LOWER(email) = LOWER(?)) OR id = ?').get(term, term, term);
+    if (!user) return { success: false, error: 'Usuario o correo incorrecto' };
     
     // Validar si el usuario está activo
     if (user.activo !== undefined && user.activo === 0) {
@@ -252,7 +274,15 @@ function login(username, password) {
     if (verifyPassword(password, user.password_hash, user.salt)) {
         // Retornar usuario sin datos sensibles
         const { password_hash: _password_hash, salt: _salt, ...safeUser } = user;
-        if (safeUser.permisos) safeUser.permisos = JSON.parse(safeUser.permisos);
+        if (safeUser.permisos) {
+            try {
+                if (typeof safeUser.permisos === 'string') safeUser.permisos = JSON.parse(safeUser.permisos);
+            } catch {
+                safeUser.permisos = ['all'];
+            }
+        } else {
+            safeUser.permisos = safeUser.role === 'admin' ? ['all'] : [];
+        }
         return { success: true, user: safeUser };
     }
     return { success: false, error: 'Contraseña incorrecta' };
@@ -260,7 +290,7 @@ function login(username, password) {
 
 function obtenerUsuarios() {
     const users = db.prepare(`
-        SELECT u.id, u.username, u.role, u.permisos, u.activo, u.fecha_creacion,
+        SELECT u.id, u.username, u.email, u.role, u.permisos, u.activo, u.fecha_creacion,
                (SELECT COUNT(*) FROM sync_queue WHERE entidad = 'usuario' AND entidad_id = u.id AND estado_sync = 0) as pendienteSync
         FROM usuarios u 
         ORDER BY u.username ASC
@@ -271,8 +301,8 @@ function obtenerUsuarios() {
 function crearUsuario(userData, password) {
     try {
         const { salt, hash } = hashPassword(password);
-        db.prepare('INSERT INTO usuarios (id, username, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-            userData.id, userData.username, hash, salt, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, userData.activo !== undefined ? (userData.activo ? 1 : 0) : 1
+        db.prepare('INSERT INTO usuarios (id, username, email, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+            userData.id, userData.username, userData.email || null, hash, salt, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, userData.activo !== undefined ? (userData.activo ? 1 : 0) : 1
         );
 
         // Agregar a Sync Queue
@@ -292,12 +322,12 @@ function actualizarUsuario(userData, newPassword = null) {
         let info;
         if (newPassword && newPassword.trim() !== '') {
             const { salt, hash } = hashPassword(newPassword);
-            info = db.prepare('UPDATE usuarios SET username = ?, role = ?, permisos = ?, password_hash = ?, salt = ?, activo = ? WHERE id = ?').run(
-                userData.username, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, hash, salt, activoVal, userData.id
+            info = db.prepare('UPDATE usuarios SET username = ?, email = ?, role = ?, permisos = ?, password_hash = ?, salt = ?, activo = ? WHERE id = ?').run(
+                userData.username, userData.email || null, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, hash, salt, activoVal, userData.id
             );
         } else {
-            info = db.prepare('UPDATE usuarios SET username = ?, role = ?, permisos = ?, activo = ? WHERE id = ?').run(
-                userData.username, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, activoVal, userData.id
+            info = db.prepare('UPDATE usuarios SET username = ?, email = ?, role = ?, permisos = ?, activo = ? WHERE id = ?').run(
+                userData.username, userData.email || null, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, activoVal, userData.id
             );
         }
 
@@ -386,16 +416,26 @@ function obtenerVentas(filtros = {}) {
 
         const ventas = db.prepare(query).all(...params);
 
-        // Fetch detalles for each venta
-        const stmtDetalles = db.prepare(`
+        // Cargar detalles de todas las ventas en una sola query JOIN para evitar N+1
+        if (ventas.length === 0) return { success: true, ventas: [] };
+
+        const ventaIds = ventas.map(v => v.id);
+        const placeholders = ventaIds.map(() => '?').join(',');
+        const todosDetalles = db.prepare(`
             SELECT d.*, p.nombre as producto_nombre 
             FROM ventas_detalle d 
             LEFT JOIN productos p ON d.producto_id = p.id 
-            WHERE d.venta_id = ?
-        `);
+            WHERE d.venta_id IN (${placeholders})
+        `).all(...ventaIds);
 
+        // Agrupar detalles por venta_id en memoria
+        const detallesPorVenta = {};
+        for (const det of todosDetalles) {
+            if (!detallesPorVenta[det.venta_id]) detallesPorVenta[det.venta_id] = [];
+            detallesPorVenta[det.venta_id].push(det);
+        }
         for (const venta of ventas) {
-            venta.detalles = stmtDetalles.all(venta.id);
+            venta.detalles = detallesPorVenta[venta.id] || [];
         }
 
         return { success: true, ventas };
@@ -458,12 +498,29 @@ function guardarVenta(ventaParams, detalleVenta) {
                 updateStock.run({ cantidad: item.cantidad, producto_id: item.producto_id });
                 const prodRow = db.prepare('SELECT * FROM productos WHERE id = ?').get(item.producto_id);
                 if (prodRow) {
-                    insertSync.run({
-                        entidad: 'producto',
-                        entidad_id: item.producto_id,
-                        operacion: 'UPDATE',
-                        datos_json: JSON.stringify(prodRow)
-                    });
+                    // Normalizar booleanos en el payload de Firebase
+                    const prodSyncData = {
+                        ...prodRow,
+                        disponible: Boolean(prodRow.disponible),
+                        destacado: Boolean(prodRow.destacado)
+                    };
+                    const prodSyncPayload = JSON.stringify(prodSyncData);
+                    // UPSERT: si ya existe una entrada pendiente para este producto, actualizarla
+                    const existingProd = db.prepare(
+                        "SELECT id FROM sync_queue WHERE entidad = 'producto' AND entidad_id = ? AND estado_sync = 0 LIMIT 1"
+                    ).get(item.producto_id);
+                    if (existingProd) {
+                        db.prepare(
+                            "UPDATE sync_queue SET datos_json = ?, fecha_creacion = CURRENT_TIMESTAMP, intentos = 0 WHERE id = ?"
+                        ).run(prodSyncPayload, existingProd.id);
+                    } else {
+                        insertSync.run({
+                            entidad: 'producto',
+                            entidad_id: item.producto_id,
+                            operacion: 'UPDATE',
+                            datos_json: prodSyncPayload
+                        });
+                    }
                 }
             }
         }
@@ -512,22 +569,49 @@ function anularVenta(ventaId) {
             updateStock.run({ cantidad: item.cantidad, producto_id: item.producto_id });
             const prodRow = selectProducto.get(item.producto_id);
             if (prodRow) {
-                insertSync.run({
-                    entidad: 'producto',
-                    entidad_id: item.producto_id,
-                    operacion: 'UPDATE',
-                    datos_json: JSON.stringify(prodRow)
-                });
+                // Normalizar booleanos en el payload de Firebase
+                const prodSyncData = {
+                    ...prodRow,
+                    disponible: Boolean(prodRow.disponible),
+                    destacado: Boolean(prodRow.destacado)
+                };
+                const prodSyncPayload = JSON.stringify(prodSyncData);
+                // UPSERT: si ya existe una entrada pendiente para este producto, actualizarla
+                const existingProd = db.prepare(
+                    "SELECT id FROM sync_queue WHERE entidad = 'producto' AND entidad_id = ? AND estado_sync = 0 LIMIT 1"
+                ).get(item.producto_id);
+                if (existingProd) {
+                    db.prepare(
+                        "UPDATE sync_queue SET datos_json = ?, fecha_creacion = CURRENT_TIMESTAMP, intentos = 0 WHERE id = ?"
+                    ).run(prodSyncPayload, existingProd.id);
+                } else {
+                    insertSync.run({
+                        entidad: 'producto',
+                        entidad_id: item.producto_id,
+                        operacion: 'UPDATE',
+                        datos_json: prodSyncPayload
+                    });
+                }
             }
         }
 
-        // Agregar a la cola de sync para actualizar el ticket a anulado en Firebase
+        // Agregar a la cola de sync para marcar el ticket como anulado en Firebase.
+        // El formato debe ser { venta: {...}, detalle: [...items] } para que
+        // sincronizarCola() pueda hacer batch.set en ventas/{id} y ventas/{id}/detalle/items.
         venta.anulado = 1;
+        // Reconstruir detalle en formato compatible con sincronizarCola (items de ticket)
+        const detalleParaSync = detalles.map(d => ({
+            id: d.id || crypto.randomUUID(),
+            producto_id: d.producto_id,
+            cantidad: d.cantidad,
+            precio_unitario: d.precio_unitario || 0,
+            subtotal: d.subtotal || 0
+        }));
         insertSync.run({
             entidad: 'venta',
             entidad_id: id,
             operacion: 'UPDATE',
-            datos_json: JSON.stringify({ venta, detalle: detalles })
+            datos_json: JSON.stringify({ venta, detalle: detalleParaSync })
         });
         
         return true;
@@ -568,9 +652,11 @@ function guardarWebConfig(key, value) {
         const valueStr = JSON.stringify(value);
         db.prepare('INSERT INTO web_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, valueStr);
         
-        // Agregar a la cola de sincronización
+        // El datos_json debe incluir la 'key' para que sincronizarCola() pueda
+        // determinar el ID del documento de Firestore (web_config/{key}).
+        const syncPayload = JSON.stringify({ key, ...(typeof value === 'object' && value !== null ? value : { _value: value }) });
         db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
-            'web_config', key, 'SET', valueStr
+            'web_config', key, 'UPDATE', syncPayload
         );
         return { success: true };
     } catch (err) {
@@ -698,12 +784,28 @@ function eliminarBanner(id) {
     }
 }
 
-function registrarUsuarioDesdeFirebase(id, username, password, role) {
+function registrarUsuarioDesdeFirebase(id, username, email, password, role, permisos = null, activo = 1) {
     try {
         const { salt, hash } = hashPassword(password);
-        db.prepare('INSERT OR IGNORE INTO usuarios (id, username, password_hash, salt, role) VALUES (?, ?, ?, ?, ?)').run(
-            id, username, hash, salt, role
-        );
+        const termUsername = (username || '').trim();
+        const termEmail = (email || '').trim();
+        const existing = db.prepare('SELECT id, username, email, role, permisos, activo FROM usuarios WHERE id = ? OR LOWER(username) = LOWER(?) OR (email IS NOT NULL AND LOWER(email) = LOWER(?))').get(id, termUsername, termEmail);
+        
+        const finalUsername = termUsername || (existing ? existing.username : (termEmail ? termEmail.split('@')[0] : id));
+        const finalEmail = termEmail || (existing ? existing.email : null);
+        const finalRole = role || (existing ? existing.role : 'admin');
+        const finalPermisos = permisos ? (typeof permisos === 'string' ? permisos : JSON.stringify(permisos)) : (existing ? existing.permisos : null);
+        const finalActivo = activo !== undefined && activo !== null ? (activo ? 1 : 0) : 1;
+
+        if (existing) {
+            db.prepare('UPDATE usuarios SET username = ?, email = ?, password_hash = ?, salt = ?, role = ?, permisos = ?, activo = ? WHERE id = ?').run(
+                finalUsername, finalEmail, hash, salt, finalRole, finalPermisos, finalActivo, existing.id
+            );
+        } else {
+            db.prepare('INSERT INTO usuarios (id, username, email, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+                id, finalUsername, finalEmail, hash, salt, finalRole, finalPermisos, finalActivo
+            );
+        }
         return { success: true };
     } catch (err) {
         return { success: false, error: err.message };
@@ -814,40 +916,9 @@ function obtenerDashboardDataLocal(tsInicioObj, strInicio) {
         // 2. Obtener Stock Bajo
         const stock = db.prepare('SELECT * FROM productos WHERE stock <= 10 ORDER BY stock ASC LIMIT 10').all();
 
-        // 3. Obtener Analytics
-        let analytics = [];
-        try {
-            analytics = db.prepare('SELECT * FROM analytics_events WHERE timestamp >= ? ORDER BY timestamp DESC').all(strInicio);
-            for (const a of analytics) {
-                // Parse data and format timestamp
-                if (a.data) {
-                    try { a.data = JSON.parse(a.data); } catch {}
-                }
-                a.timestamp = { seconds: Math.floor(new Date(a.timestamp).getTime() / 1000) };
-            }
-        } catch (e) {
-            console.error("No se pudo obtener analytics:", e);
-        }
-
-        return { success: true, ventas, stock, analytics };
+        return { success: true, ventas, stock };
     } catch (err) {
         console.error("Error obteniendo dashboard local:", err);
-        return { success: false, error: err.message };
-    }
-}
-
-function obtenerAnalyticsLocal() {
-    try {
-        const events = db.prepare('SELECT * FROM analytics_events ORDER BY timestamp DESC LIMIT 100').all();
-        for (const e of events) {
-            if (e.data) {
-                try { e.data = JSON.parse(e.data); } catch {}
-            }
-            e.timestamp = { seconds: Math.floor(new Date(e.timestamp).getTime() / 1000) };
-        }
-        return { success: true, events };
-    } catch (err) {
-        console.error("Error obteniendo analytics local:", err);
         return { success: false, error: err.message };
     }
 }
@@ -882,7 +953,6 @@ module.exports = {
     obtenerListasCompras,
     eliminarListaCompra,
     limpiarUsuariosLocales,
-    obtenerDashboardDataLocal,
-    obtenerAnalyticsLocal
+    obtenerDashboardDataLocal
 };
 

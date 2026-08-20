@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useUIStore } from '../../store/useUIStore';
-import { BarChart3, Users as UsersIcon, MessageCircle, ShoppingBag, DollarSign, TrendingUp, RefreshCw, ShoppingCart, Globe, CreditCard, AlertTriangle, CloudOff, Activity } from 'lucide-react';
+import { BarChart3, ShoppingBag, DollarSign, TrendingUp, RefreshCw, ShoppingCart, CreditCard, AlertTriangle, CloudOff, Activity } from 'lucide-react';
 
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState<'pos' | 'web'>('pos');
   const [loading, setLoading] = useState(false);
   const { setLoading: setGlobalLoading } = useUIStore();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -13,7 +12,6 @@ export default function Dashboard() {
   const [ventas, setVentas] = useState<any[]>([]);
   const [ventasRecientes, setVentasRecientes] = useState<any[]>([]);
   const [productosBajoStock, setProductosBajoStock] = useState<any[]>([]);
-  const [analyticsData, setAnalyticsData] = useState<any[]>([]);
   const [dateFilter, setDateFilter] = useState<'today' | 'week' | 'month'>('today');
 
   useEffect(() => {
@@ -46,7 +44,6 @@ export default function Dashboard() {
         setVentas(res.ventas || []);
         setVentasRecientes(res.ventas ? res.ventas.slice(0, 5) : []);
         setProductosBajoStock(res.stock || []);
-        setAnalyticsData(res.analytics || []);
         setErrorMsg(null);
       } else {
         console.error('Error del backend cargando dashboard:', res.error);
@@ -132,26 +129,10 @@ export default function Dashboard() {
       </div>
 
       <div className="flex flex-col flex-1 overflow-hidden p-6 gap-6 relative">
-        {/* Pestañas (Tabs) */}
         <div className="flex justify-between items-center">
-          <div className="flex bg-white rounded-lg p-1 w-fit border border-slate-300 shadow-sm">
-            <button
-              onClick={() => setActiveTab('pos')}
-              className={`px-6 py-2.5 text-sm font-bold rounded-md transition-all flex items-center gap-2 cursor-pointer ${
-                activeTab === 'pos' ? 'bg-blue-650 text-white shadow-md' : 'text-slate-650 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <ShoppingCart size={16} /> Tienda Física (POS)
-            </button>
-            <button
-              onClick={() => setActiveTab('web')}
-              className={`px-6 py-2.5 text-sm font-bold rounded-md transition-all flex items-center gap-2 cursor-pointer ${
-                activeTab === 'web' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-650 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <Globe size={16} /> Tienda Web
-            </button>
-          </div>
+          <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+            <ShoppingCart size={20} className="text-blue-600" /> Resumen de Ventas e Inventario
+          </h2>
           
           <div className="flex bg-slate-200 border border-slate-300 rounded-lg p-1">
             <button onClick={() => setDateFilter('today')} className={`px-4 py-2 text-xs font-bold rounded transition-colors cursor-pointer ${dateFilter === 'today' ? 'bg-white text-slate-900 border border-slate-250 shadow-sm' : 'text-slate-650 hover:text-slate-900'}`}>Hoy</button>
@@ -165,7 +146,7 @@ export default function Dashboard() {
              <div className="flex items-center justify-center h-64">
                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
              </div>
-          ) : activeTab === 'pos' && (
+          ) : (
             <div className="space-y-6 animate-in fade-in duration-300">
               
               {/* KPIs */}
@@ -279,67 +260,6 @@ export default function Dashboard() {
 
                 </div>
 
-              </div>
-            </div>
-          )}
-
-          {!loading && activeTab === 'web' && (
-            <div className="space-y-6 animate-in fade-in duration-300">
-               <div className="flex justify-between items-center">
-                <h2 className="text-lg font-semibold text-slate-700">Rendimiento Tienda Web</h2>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-white border border-slate-200 p-6 rounded-2xl flex flex-col justify-center shadow-lg hover:border-blue-500/30 transition-colors">
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className="w-12 h-12 bg-blue-500/10 rounded-xl flex items-center justify-center text-blue-600">
-                      <UsersIcon size={24} />
-                    </div>
-                    <span className="text-slate-600 font-medium">Visitas Totales</span>
-                  </div>
-                  <span className="text-3xl font-black text-slate-900">
-                    {analyticsData.filter(e => e.type === 'pageview').length}
-                  </span>
-                </div>
-
-                <div className="bg-white border border-slate-200 p-6 rounded-2xl flex flex-col justify-center shadow-lg hover:border-green-500/30 transition-colors">
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className="w-12 h-12 bg-green-500/10 rounded-xl flex items-center justify-center text-green-400">
-                      <MessageCircle size={24} />
-                    </div>
-                    <span className="text-slate-600 font-medium">Consultas a WhatsApp</span>
-                  </div>
-                  <span className="text-3xl font-black text-slate-900">
-                    {analyticsData.filter(e => e.type === 'whatsapp_click').length}
-                  </span>
-                </div>
-              </div>
-
-              <div className="bg-white border border-slate-200 rounded-2xl p-6">
-                <h3 className="text-sm font-semibold text-slate-700 mb-4 border-b border-slate-300 pb-2">Actividad Web Reciente (Cloud)</h3>
-                {analyticsData.length === 0 ? (
-                  <p className="text-xs text-slate-500 text-center py-8">No hay datos registrados aún.</p>
-                ) : (
-                  <div className="space-y-3 max-h-80 overflow-y-auto custom-scrollbar-light-light-light pr-2">
-                    {analyticsData.slice(0, 50).map(event => (
-                      <div key={event.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-200 hover:bg-slate-100/50 transition-colors">
-                        <div className="flex items-center gap-3">
-                          {event.type === 'whatsapp_click' ? (
-                            <div className="w-8 h-8 rounded-lg bg-green-500/10 flex items-center justify-center"><MessageCircle size={14} className="text-green-400" /></div>
-                          ) : (
-                            <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center"><Globe size={14} className="text-blue-600" /></div>
-                          )}
-                          <span className="text-sm text-slate-700 font-medium">
-                            {event.type === 'whatsapp_click' ? 'Consulta WhatsApp' : 'Visita a la página principal'}
-                          </span>
-                        </div>
-                        <span className="text-xs text-slate-500 bg-white px-2 py-1 rounded border border-slate-200">
-                          {event.timestamp ? new Date(event.timestamp.seconds ? event.timestamp.seconds * 1000 : event.timestamp).toLocaleString() : 'Reciente'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
           )}

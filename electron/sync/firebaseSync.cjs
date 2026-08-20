@@ -1,8 +1,8 @@
 const { db, limpiarUsuariosLocales } = require('../database/db.cjs');
 const { initializeApp, deleteApp, getApps } = require('firebase/app');
-const { getFirestore, doc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField, vector } = require('firebase/firestore');
+const { getFirestore, doc, getDoc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField, vector } = require('firebase/firestore');
 const { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } = require('firebase/auth');
-const { getStorage, ref, uploadBytes, getDownloadURL } = require('firebase/storage');
+const { getStorage, ref, uploadBytes, getDownloadURL, listAll, deleteObject } = require('firebase/storage');
 
 const fs = require('fs');
 const path = require('path');
@@ -204,21 +204,87 @@ function construirTextoRAGSync(p) {
  */
 async function obtenerVectorEmbedding(textoRAG) {
     const apiKey = getGeminiApiKey();
-    if (!apiKey) return null;
+    if (!apiKey) {
+        console.warn('[Sync Embedding] No hay GEMINI_API_KEY disponible.');
+        return null;
+    }
     try {
         const { GoogleGenerativeAI } = require('@google/generative-ai');
         const genAI = new GoogleGenerativeAI(apiKey);
         const modelo = process.env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-2';
         const embeddingModel = genAI.getGenerativeModel({ model: modelo });
-        const result = await embeddingModel.embedContent({
-            content: { parts: [{ text: textoRAG }] },
-            outputDimensionality: 768
-        });
-        const values = result.embedding.values.slice(0, 768);
-        return vector(values);
+        let values = [];
+        try {
+            const result = await embeddingModel.embedContent({
+                content: { role: 'user', parts: [{ text: textoRAG }] },
+                outputDimensionality: 768
+            });
+            values = result.embedding.values.slice(0, 768);
+        } catch {
+            const fallback = await embeddingModel.embedContent(textoRAG);
+            values = fallback.embedding.values.slice(0, 768);
+        }
+        if (values && values.length > 0) {
+            return vector(values);
+        }
+        return null;
     } catch (err) {
         console.warn('[Sync Embedding] Warning generando embedding:', err.message);
         return null;
+    }
+}
+
+/**
+ * Escanea la colección 'productos' en Firestore y genera/rectifica los embeddings
+ * y texto_rag faltantes en cualquier producto existente.
+ */
+async function repararEmbeddingsNube() {
+    if (!firestore) return { success: false, error: 'Firestore no está inicializado' };
+    console.log('[Reparar Embeddings] Iniciando escaneo de productos en la nube...');
+    try {
+        const snapshot = await getDocs(collection(firestore, 'productos'));
+        if (snapshot.empty) {
+            return { success: true, count: 0, message: 'No hay productos en la base de datos' };
+        }
+
+        let reparados = 0;
+        let omitidos = 0;
+
+        for (const docSnap of snapshot.docs) {
+            const data = docSnap.data();
+            const necesitaEmbedding = !data.embedding || !data.texto_rag || !data.modelo_embedding;
+
+            if (necesitaEmbedding) {
+                const textoRAG = construirTextoRAGSync({ id: docSnap.id, ...data });
+                const vectorVal = await obtenerVectorEmbedding(textoRAG);
+
+                if (vectorVal) {
+                    const updatePayload = {
+                        texto_rag: textoRAG,
+                        embedding: vectorVal,
+                        modelo_embedding: 'gemini-embedding-2',
+                        embedding_generado_en: new Date().toISOString()
+                    };
+                    const batch = writeBatch(firestore);
+                    batch.set(doc(firestore, 'productos', docSnap.id), updatePayload, { merge: true });
+                    await batch.commit();
+                    reparados++;
+                    console.log(`[Reparar Embeddings] ✅ Embedding (768 dims) generado y guardado para: "${data.nombre || docSnap.id}"`);
+                    // Pausa de 150ms para respetar límites de cuota de Gemini API
+                    await new Promise(resolve => setTimeout(resolve, 150));
+                } else {
+                    console.warn(`[Reparar Embeddings] ⚠️ No se pudo generar embedding para: "${data.nombre || docSnap.id}"`);
+                }
+            } else {
+                omitidos++;
+            }
+        }
+
+        console.log(`[Reparar Embeddings] 🎉 Finalizado. Reparados: ${reparados}, Omitidos (ya tenían): ${omitidos}`);
+        return { success: true, reparados, omitidos };
+    } catch (err) {
+        console.error('[Reparar Embeddings] Error durante la reparación:', err);
+        return { success: false, error: err.message };
     }
 }
 
@@ -350,6 +416,10 @@ async function sincronizarCola() {
                     if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
                         let finalData = { ...data };
                         
+                        // Garantizar que el ID del documento es siempre el entidad_id de la cola
+                        // (evita duplicados si el body trae un campo 'id' diferente)
+                        finalData.id = reg.entidad_id;
+
                         // Si hay imagen local pendiente, subirla a Storage
                         if (finalData.imagenLocal && !finalData.imagenUrl) {
                             const base64Data = finalData.imagenLocal.replace(/^data:image\/\w+;base64,/, '');
@@ -364,10 +434,19 @@ async function sincronizarCola() {
                         }
                         
                         // Eliminar campos pesados/obsoletos de Firestore
+                        finalData.imageUrl = deleteField();
                         finalData.imagenLocal = deleteField();
                         finalData.thumbnailLocal = deleteField();
                         finalData.thumbnailUrl = deleteField();
+                        finalData.tags = deleteField();
+
+                        // Normalizar tipos: disponible y destacado deben ser booleanos en Firestore
+                        finalData.disponible = finalData.disponible === true || finalData.disponible === 1 || finalData.disponible === '1';
+                        finalData.destacado = finalData.destacado === true || finalData.destacado === 1 || finalData.destacado === '1';
                         
+                        // Normalizar etiquetas a array limpio de strings
+                        finalData.etiquetas = parsearEtiquetasSync(finalData.etiquetas);
+
                         // Generar e incluir texto_rag y vector de embedding nativo (768 dims)
                         try {
                             const textoRAG = construirTextoRAGSync(finalData);
@@ -375,6 +454,8 @@ async function sincronizarCola() {
                             const vectorVal = await obtenerVectorEmbedding(textoRAG);
                             if (vectorVal) {
                                 finalData.embedding = vectorVal;
+                                finalData.embedding_generado_en = new Date().toISOString();
+                                finalData.modelo_embedding = 'gemini-embedding-2';
                             }
                         } catch (embedErr) {
                             console.warn(`[Sync] Warning generando embedding para ${finalData.nombre}:`, embedErr.message);
@@ -400,7 +481,9 @@ async function sincronizarCola() {
                     }
                 } else if (reg.entidad === 'web_config') {
                     const docRef = doc(firestore, 'web_config', reg.entidad_id);
-                    batch.set(docRef, data, { merge: true });
+                    // data debe incluir el objeto de configuracion (sin el campo 'key' que es el ID del doc)
+                    const { key: _key, ...configData } = data;
+                    batch.set(docRef, configData, { merge: true });
                 } else if (reg.entidad === 'banner') {
                     const docRef = doc(firestore, 'banners', reg.entidad_id);
                     if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
@@ -457,32 +540,34 @@ async function sincronizarCola() {
                 totalProcesados += registrosProcesados.length;
                 console.log(`Batch sincronizado: ${registrosProcesados.length} registros.`);
 
-                // ── Hook post-sync: Generar embeddings para productos ──────────
-                // Se ejecuta DESPUÉS del commit para no bloquear la sincronización.
-                // Se lanza sin await para que sea completamente no-bloqueante.
-                const productosParaEmbed = chunk.filter(reg =>
-                    reg.entidad === 'producto' &&
-                    (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') &&
+                // ── Hook post-sync: Invalidar caché de Next.js en Tienda-web ──────────
+                // Se llama al webhook de revalidación para que los cambios en productos
+                // y banners sean visibles inmediatamente en la tienda web (< 2s).
+                // Se ejecuta de forma no bloqueante.
+                const hayProductosOBanners = chunk.some(reg =>
+                    (reg.entidad === 'producto' || reg.entidad === 'banner') &&
                     registrosProcesados.includes(reg.id)
                 );
-
-                if (productosParaEmbed.length > 0) {
-                    const embedPromises = productosParaEmbed.map(reg => {
-                        try {
-                            const data = JSON.parse(reg.datos_json);
-                            return generarEmbeddingProducto(data);
-                        } catch { return Promise.resolve(); }
-                    });
-                    // No bloqueante: no esperamos a que terminen los embeddings
-                    Promise.allSettled(embedPromises).then(results => {
-                        const exitosos = results.filter(r => r.status === 'fulfilled').length;
-                        const fallidos = results.filter(r => r.status === 'rejected').length;
-                        if (productosParaEmbed.length > 0) {
-                            console.log(`[Embed] Resultado: ${exitosos} exitosos, ${fallidos} fallidos de ${productosParaEmbed.length} productos.`);
+                if (hayProductosOBanners) {
+                    const revalidateUrl = `${TIENDA_WEB_URL}/api/revalidate`;
+                    fetch(revalidateUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-revalidate-secret': EMBED_SECRET,
+                        },
+                        body: JSON.stringify({ tags: ['productos', 'banners'] }),
+                    }).then(res => {
+                        if (res.ok) {
+                            console.log('[Sync] ✅ Caché de Tienda-web invalidada correctamente.');
+                        } else {
+                            console.warn(`[Sync] ⚠️ Webhook de revalidación retornó HTTP ${res.status}.`);
                         }
+                    }).catch(err => {
+                        console.warn('[Sync] ⚠️ No se pudo contactar el webhook de revalidación:', err.message);
                     });
                 }
-                // ──────────────────────────────────────────────────────────────
+                // ──────────────────────────────────────────────────────────────────────
 
             } catch (error) {
                 console.error('Error al comitear batch a Firestore:', error);
@@ -533,22 +618,73 @@ function startSyncWorker() {
 // AUTENTICACIÓN FIREBASE AUTH
 // ====================================================================
 
-// Login principal: Autentica SOLO contra Firebase Auth
-// Es el flujo correcto para la primera instalación y logins normales
-async function loginConFirebase(email, password) {
+// Login principal: Autentica contra Firebase Auth y recupera perfil de Firestore
+async function loginConFirebase(identifier, password) {
+    if (!auth) return { success: false, error: 'Firebase no está inicializado.' };
     try {
-        const loginEmail = buildAuthEmail(email);
+        let loginEmail = (identifier || '').trim();
+        
+        // Si no contiene '@', intentar resolver el correo asociado
+        if (!loginEmail.includes('@')) {
+            // 1. Buscar en base de datos local
+            try {
+                const localUser = db.prepare('SELECT email, username FROM usuarios WHERE LOWER(username) = LOWER(?)').get(loginEmail);
+                if (localUser && localUser.email) {
+                    loginEmail = localUser.email;
+                }
+            } catch {}
+            
+            // 2. Si sigue sin '@', construir con buildAuthEmail como fallback
+            if (!loginEmail.includes('@')) {
+                loginEmail = buildAuthEmail(loginEmail);
+            }
+        }
+
         const userCredential = await signInWithEmailAndPassword(auth, loginEmail, password);
-        return { success: true, uid: userCredential.user.uid, email: userCredential.user.email };
+        const uid = userCredential.user.uid;
+        const email = userCredential.user.email || loginEmail;
+
+        // Obtener el perfil real del usuario desde Firestore
+        let userProfile = null;
+        try {
+            if (firestore) {
+                const userDoc = await getDoc(doc(firestore, 'usuarios', uid));
+                if (userDoc.exists()) {
+                    userProfile = { id: userDoc.id, ...userDoc.data() };
+                }
+            }
+        } catch (docErr) {
+            console.warn('Advertencia al consultar perfil en Firestore:', docErr.message);
+        }
+
+        // Si la cuenta está explícitamente desactivada, impedir el acceso
+        if (userProfile && userProfile.activo === false) {
+            try { await auth.signOut(); } catch {}
+            return { success: false, error: 'Tu cuenta ha sido desactivada. Contacta al administrador.', code: 'auth/user-disabled' };
+        }
+
+        const finalUsername = (userProfile && userProfile.username) ? userProfile.username : (email.includes('@') ? email.split('@')[0] : identifier);
+        const finalRole = (userProfile && userProfile.role) ? userProfile.role : 'admin';
+        const finalPermisos = (userProfile && userProfile.permisos) ? userProfile.permisos : (finalRole === 'admin' ? ['all'] : []);
+
+        return { 
+            success: true, 
+            uid, 
+            email, 
+            username: finalUsername,
+            role: finalRole,
+            permisos: finalPermisos,
+            profile: userProfile 
+        };
     } catch (err) {
         console.error("Error in loginConFirebase:", err);
         let friendlyError = err.message;
         if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' || err.code === 'auth/invalid-login-credentials') {
-            friendlyError = 'Contraseña incorrecta';
+            friendlyError = 'Contraseña o credenciales incorrectas.';
         } else if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-email') {
-            friendlyError = 'Usuario no encontrado en Firebase Auth';
+            friendlyError = 'Usuario o correo electrónico no encontrado en Firebase Auth.';
         } else if (err.code === 'auth/too-many-requests') {
-            friendlyError = 'Demasiados intentos. Espera unos minutos antes de reintentar.';
+            friendlyError = 'Demasiados intentos fallidos. Espera unos minutos antes de reintentar.';
         } else if (err.code === 'auth/operation-not-allowed') {
             friendlyError = "Debes habilitar 'Correo electrónico/Contraseña' en la sección Authentication de tu consola Firebase.";
         }
@@ -557,10 +693,10 @@ async function loginConFirebase(email, password) {
 }
 
 // Crear usuario en Firebase Auth (para nuevos colaboradores)
-async function crearUsuarioAuth(email, password) {
+async function crearUsuarioAuth(emailOrUsername, password) {
     if (!firebaseConfig) return { success: false, error: 'Firebase no configurado' };
     try {
-        const authEmail = buildAuthEmail(email);
+        const authEmail = buildAuthEmail(emailOrUsername);
         await createUserWithEmailAndPassword(secondaryAuth, authEmail, password);
         return { success: true };
     } catch (authErr) {
@@ -577,7 +713,7 @@ async function crearUsuarioAuth(email, password) {
 async function obtenerDashboardData(tsInicioObj, strInicio) {
     if (!firestore) return { success: false, error: 'Firebase no configurado' };
     try {
-        const { Timestamp, where } = require('firebase/firestore');
+        const { where } = require('firebase/firestore');
 
         // 1. Cargar Ventas
         const qVentas = query(collection(firestore, 'ventas'), where('fecha', '>=', strInicio), orderBy('fecha', 'desc'));
@@ -589,7 +725,7 @@ async function obtenerDashboardData(tsInicioObj, strInicio) {
         const snapStock = await getDocs(qStock);
         const stockList = snapStock.docs.map(d => ({ id: d.id, ...d.data() }));
 
-        return { success: true, ventas: ventasList, stock: stockList, analytics: [] };
+        return { success: true, ventas: ventasList, stock: stockList };
     } catch (err) {
         console.error("Error obteniendo dashboard data:", err);
         return { success: false, error: err.message };
@@ -617,6 +753,100 @@ async function subirImagenStorage(buffer, type, categoria) {
 }
 
 // ====================================================================
+// LIMPIEZA DE ARCHIVOS HUÉRFANOS EN FIREBASE STORAGE
+// ====================================================================
+async function limpiarArchivosHuerfanosStorage() {
+    if (!storage || !firestore) {
+        return { success: false, error: 'Firebase no está inicializado o configurado.' };
+    }
+
+    try {
+        console.log('[Storage Cleanup] Iniciando auditoría de archivos huérfanos en Storage...');
+
+        // 1. Recopilar todas las URLs de imágenes activas en Firestore
+        const [prodSnap, bannerSnap] = await Promise.all([
+            getDocs(collection(firestore, 'productos')),
+            getDocs(collection(firestore, 'banners'))
+        ]);
+
+        const urlsEnUso = new Set();
+
+        prodSnap.forEach(docSnap => {
+            const data = docSnap.data();
+            if (data.imageUrl) urlsEnUso.add(String(data.imageUrl));
+            if (data.imagenUrl) urlsEnUso.add(String(data.imagenUrl));
+            if (data.thumbnailUrl) urlsEnUso.add(String(data.thumbnailUrl));
+        });
+
+        bannerSnap.forEach(docSnap => {
+            const data = docSnap.data();
+            if (data.imageUrl) urlsEnUso.add(String(data.imageUrl));
+            if (data.imagenUrl) urlsEnUso.add(String(data.imagenUrl));
+        });
+
+        // Incluir también URLs de SQLite local por máxima seguridad
+        try {
+            const prodLocales = db.prepare('SELECT imageUrl, imagenUrl, thumbnailUrl FROM productos').all();
+            prodLocales.forEach(p => {
+                if (p.imageUrl) urlsEnUso.add(String(p.imageUrl));
+                if (p.imagenUrl) urlsEnUso.add(String(p.imagenUrl));
+                if (p.thumbnailUrl) urlsEnUso.add(String(p.thumbnailUrl));
+            });
+            const bannersLocales = db.prepare('SELECT imageUrl, imagenUrl FROM banners').all();
+            bannersLocales.forEach(b => {
+                if (b.imageUrl) urlsEnUso.add(String(b.imageUrl));
+                if (b.imagenUrl) urlsEnUso.add(String(b.imagenUrl));
+            });
+        } catch (e) {
+            console.warn('[Storage Cleanup] Aviso leyendo SQLite local:', e.message);
+        }
+
+        // 2. Listar y auditar carpetas 'productos' y 'banners'
+        const carpetas = ['productos', 'banners'];
+        let totalEliminados = 0;
+        let totalAnalizados = 0;
+
+        for (const carpeta of carpetas) {
+            const folderRef = ref(storage, carpeta);
+            try {
+                const res = await listAll(folderRef);
+                totalAnalizados += res.items.length;
+
+                for (const itemRef of res.items) {
+                    const itemFullPath = itemRef.fullPath; // ej: "banners/GEN-UTJD.webp"
+                    const encodedFullPath = encodeURIComponent(itemFullPath);
+
+                    // Verificar si el archivo está en uso por alguna URL
+                    const enUso = Array.from(urlsEnUso).some(url => 
+                        url.includes(itemFullPath) || 
+                        url.includes(encodedFullPath)
+                    );
+
+                    if (!enUso) {
+                        console.log(`[Storage Cleanup] 🗑️ Eliminando archivo huérfano: ${itemFullPath}`);
+                        await deleteObject(itemRef);
+                        totalEliminados++;
+                    }
+                }
+            } catch (folderErr) {
+                console.warn(`[Storage Cleanup] Aviso escaneando carpeta ${carpeta}:`, folderErr.message);
+            }
+        }
+
+        console.log(`[Storage Cleanup] ✅ Finalizado: ${totalEliminados} archivos eliminados de ${totalAnalizados} analizados.`);
+        return {
+            success: true,
+            totalAnalizados,
+            totalEliminados,
+            totalConservados: totalAnalizados - totalEliminados
+        };
+    } catch (err) {
+        console.error('[Storage Cleanup] Error:', err);
+        return { success: false, error: err.message };
+    }
+}
+
+// ====================================================================
 // DESCARGA COMPLETA DESDE FIREBASE → SQLite
 // ====================================================================
 async function descargarDatosDesdeNube() {
@@ -635,17 +865,23 @@ async function descargarDatosDesdeNube() {
         // 1. Descargar Productos
         const prodSnap = await getDocs(collection(firestore, 'productos'));
         const productos = [];
-        prodSnap.forEach(d => productos.push(d.data()));
+        prodSnap.forEach(d => {
+            // El ID del documento en Firestore SIEMPRE prevalece sobre cualquier
+            // campo 'id' que pueda estar dentro del body del documento.
+            // Esto garantiza coherencia entre SQLite y Firestore.
+            const bodyData = d.data();
+            productos.push({ ...bodyData, id: d.id });
+        });
 
         // 2. Descargar Usuarios
         const userSnap = await getDocs(collection(firestore, 'usuarios'));
         const usuarios = [];
-        userSnap.forEach(d => usuarios.push(d.data()));
+        userSnap.forEach(d => usuarios.push({ id: d.id, ...d.data() }));
 
         // 3. Descargar Banners
         const bannerSnap = await getDocs(collection(firestore, 'banners'));
         const banners = [];
-        bannerSnap.forEach(d => banners.push(d.data()));
+        bannerSnap.forEach(d => banners.push({ id: d.id, ...d.data() }));
 
         // 4. Descargar Ventas y Detalles
         const ventasList = [];
@@ -687,17 +923,12 @@ async function descargarDatosDesdeNube() {
         const comprasListas = [];
         comprasListasSnap.forEach(d => comprasListas.push({ id: d.id, data: d.data() }));
 
-        // 7. Descargar Analytics Events
-        const analyticsSnap = await getDocs(collection(firestore, 'analytics_events'));
-        const analyticsEvents = [];
-        analyticsSnap.forEach(d => analyticsEvents.push({ id: d.id, data: d.data() }));
-
         console.log("Descarga de red completada con éxito. Escribiendo de forma atómica en SQLite...");
 
-        // 8. Guardar en SQLite en UNA SOLA TRANSACCIÓN ATÓMICA
+        // 7. Guardar en SQLite en UNA SOLA TRANSACCIÓN ATÓMICA
         const stmtInsertProd = db.prepare('INSERT OR REPLACE INTO productos (id, codigoBarras, nombre, descripcion, categoria, precio, costo, stock, unidadMedida, imagenUrl, thumbnailUrl, imagenLocal, thumbnailLocal, disponible, destacado, etiquetas) VALUES (@id, @codigoBarras, @nombre, @descripcion, @categoria, @precio, @costo, @stock, @unidadMedida, @imagenUrl, @thumbnailUrl, @imagenLocal, @thumbnailLocal, @disponible, @destacado, @etiquetas)');
-        const stmtCheckUser = db.prepare('SELECT password_hash, salt FROM usuarios WHERE id = ? OR username = ?');
-        const stmtUser = db.prepare('INSERT OR REPLACE INTO usuarios (id, username, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        const stmtCheckUser = db.prepare('SELECT password_hash, salt FROM usuarios WHERE id = ? OR username = ? OR (email IS NOT NULL AND LOWER(email) = LOWER(?))');
+        const stmtUser = db.prepare('INSERT OR REPLACE INTO usuarios (id, username, email, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
         const stmtBanner = db.prepare('INSERT OR REPLACE INTO banners (id, title, subtitle, imageUrl, imagenLocal, badgeText, ctaText, ctaActionCategory, active, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         const insertVenta = db.prepare('INSERT OR REPLACE INTO ventas (id, fecha, total, metodoPago, estado, clienteNombre, clienteDocumento) VALUES (?, ?, ?, ?, ?, ?, ?)');
         const insertDetalle = db.prepare('INSERT OR REPLACE INTO ventas_detalle (id, venta_id, producto_id, cantidad, precio_unitario, subtotal) VALUES (?, ?, ?, ?, ?, ?)');
@@ -705,13 +936,15 @@ async function descargarDatosDesdeNube() {
         const stmtWebConfig = db.prepare('INSERT OR REPLACE INTO web_config (key, value) VALUES (?, ?)');
         const stmtLista = db.prepare('INSERT OR REPLACE INTO compras_listas (id, nombre, fecha, total_estimado, estado) VALUES (?, ?, ?, ?, ?)');
         const stmtDetalleLista = db.prepare('INSERT OR REPLACE INTO compras_listas_detalle (id, lista_id, producto_id, cantidad_pedir, costo_unitario) VALUES (?, ?, ?, ?, ?)');
-        const stmtAnalytics = db.prepare('INSERT OR REPLACE INTO analytics_events (id, type, timestamp, data) VALUES (?, ?, ?, ?)');
 
         const tx = db.transaction(() => {
             // A. Registrar Usuarios preservando contraseñas locales si ya existen
             for (const u of usuarios) {
                 let hash, salt;
-                const existing = stmtCheckUser.get(u.id || u.username, u.username);
+                const userId = u.id || u.username || 'admin';
+                const username = u.username || u.id || 'admin';
+                const email = u.email || null;
+                const existing = stmtCheckUser.get(userId, username, email || '');
                 
                 if (existing) {
                     hash = existing.password_hash;
@@ -723,42 +956,55 @@ async function descargarDatosDesdeNube() {
                 }
                 
                 stmtUser.run(
-                    u.id || u.username, 
-                    u.username, 
+                    userId, 
+                    username, 
+                    email,
                     hash, 
                     salt, 
-                    u.role || 'user', 
-                    u.permisos ? JSON.stringify(u.permisos) : null,
-                    u.activo !== undefined ? (u.activo ? 1 : 0) : 1
+                    u.role || 'colaborador', 
+                    u.permisos ? (typeof u.permisos === 'string' ? u.permisos : JSON.stringify(u.permisos)) : null,
+                    u.activo !== undefined && u.activo !== null ? (u.activo ? 1 : 0) : 1
                 );
             }
+
+            // Helper de sanitización estricta para columnas de texto de SQLite
+            const toStrOrNull = (val) => (typeof val === 'string' && val.trim() !== '' ? val : null);
 
             // B. Registrar Productos
             for (const p of productos) {
                 stmtInsertProd.run({
-                    id: p.id,
-                    codigoBarras: p.codigoBarras || null,
-                    nombre: p.nombre || '',
-                    descripcion: p.descripcion || null,
-                    categoria: p.categoria || 'Abarrotes',
-                    precio: p.precio !== undefined ? p.precio : 0,
-                    costo: p.costo !== undefined ? p.costo : null,
-                    stock: p.stock !== undefined ? p.stock : 0,
-                    unidadMedida: p.unidadMedida || 'unidad',
-                    imagenUrl: p.imagenUrl || null,
-                    thumbnailUrl: p.thumbnailUrl || null,
-                    imagenLocal: p.imagenLocal || null,
-                    thumbnailLocal: p.thumbnailLocal || null,
-                    disponible: p.disponible ? 1 : 0,
-                    destacado: p.destacado ? 1 : 0,
-                    etiquetas: p.etiquetas ? JSON.stringify(p.etiquetas) : null
+                    id: typeof p.id === 'string' ? p.id : (p.id || require('crypto').randomUUID()),
+                    codigoBarras: toStrOrNull(p.codigoBarras),
+                    nombre: typeof p.nombre === 'string' ? p.nombre : '',
+                    descripcion: toStrOrNull(p.descripcion),
+                    categoria: typeof p.categoria === 'string' ? p.categoria : 'Abarrotes',
+                    precio: (p.precio !== undefined && p.precio !== null) ? Number(p.precio) : 0,
+                    costo: (p.costo !== undefined && p.costo !== null) ? Number(p.costo) : null,
+                    stock: (p.stock !== undefined && p.stock !== null) ? Number(p.stock) : 0,
+                    unidadMedida: typeof p.unidadMedida === 'string' ? p.unidadMedida : 'unidad',
+                    imagenUrl: toStrOrNull(p.imagenUrl) || toStrOrNull(p.imageUrl),
+                    thumbnailUrl: toStrOrNull(p.thumbnailUrl),
+                    imagenLocal: toStrOrNull(p.imagenLocal),
+                    thumbnailLocal: toStrOrNull(p.thumbnailLocal),
+                    disponible: (p.disponible !== false && p.disponible !== 0 && p.disponible !== '0') ? 1 : 0,
+                    destacado: (p.destacado === true || p.destacado === 1 || p.destacado === '1' || p.destacado === 'true') ? 1 : 0,
+                    etiquetas: p.etiquetas ? (typeof p.etiquetas === 'string' ? p.etiquetas : JSON.stringify(p.etiquetas)) : null
                 });
             }
 
             // C. Registrar Banners
             for (const b of banners) {
                 stmtBanner.run(
-                    b.id, b.title || '', b.subtitle || null, b.imageUrl || null, b.imagenLocal || null, b.badgeText || null, b.ctaText || 'Ver más', b.ctaActionCategory || null, b.active ? 1 : 0, b.priority || 0
+                    typeof b.id === 'string' ? b.id : (b.id || require('crypto').randomUUID()),
+                    typeof b.title === 'string' ? b.title : '',
+                    toStrOrNull(b.subtitle),
+                    toStrOrNull(b.imageUrl) || toStrOrNull(b.imagenUrl),
+                    toStrOrNull(b.imagenLocal),
+                    toStrOrNull(b.badgeText),
+                    toStrOrNull(b.ctaText) || 'Ver más',
+                    toStrOrNull(b.ctaActionCategory) || 'Todas',
+                    (b.active === undefined || b.active === true || b.active === 1 || b.active === '1') ? 1 : 0,
+                    (b.priority !== undefined && b.priority !== null) ? Number(b.priority) : 0
                 );
             }
 
@@ -779,28 +1025,30 @@ async function descargarDatosDesdeNube() {
                 insertVenta.run(
                     ventaId,
                     fechaSql,
-                    v.total || 0,
+                    (v.total !== undefined && v.total !== null) ? Number(v.total) : 0,
                     v.metodoPago || 'Efectivo',
                     v.estado || 'completada',
                     v.clienteNombre || null,
                     v.clienteDocumento || null
                 );
 
-                for (const d of itemVenta.detalles) {
-                    insertDetalle.run(
-                        d.id || require('crypto').randomUUID(),
-                        ventaId,
-                        d.producto_id || '',
-                        d.cantidad || 1,
-                        d.precio_unitario || 0,
-                        d.subtotal || 0
-                    );
+                if (Array.isArray(itemVenta.detalles)) {
+                    for (const d of itemVenta.detalles) {
+                        insertDetalle.run(
+                            d.id || require('crypto').randomUUID(),
+                            ventaId,
+                            d.producto_id || d.productoId || '',
+                            (d.cantidad !== undefined && d.cantidad !== null) ? Number(d.cantidad) : 1,
+                            (d.precio_unitario !== undefined && d.precio_unitario !== null) ? Number(d.precio_unitario) : (d.precioUnitario || 0),
+                            (d.subtotal !== undefined && d.subtotal !== null) ? Number(d.subtotal) : 0
+                        );
+                    }
                 }
             }
 
             // E. Registrar Web Config
             for (const wc of webConfig) {
-                stmtWebConfig.run(wc.key, wc.value);
+                stmtWebConfig.run(wc.key || '', wc.value || '{}');
             }
 
             // F. Registrar Listas de Compra
@@ -821,43 +1069,21 @@ async function descargarDatosDesdeNube() {
                     listaId,
                     l.nombre || 'Lista Importada',
                     fechaSql,
-                    l.total_estimado || 0,
+                    (l.total_estimado !== undefined && l.total_estimado !== null) ? Number(l.total_estimado) : 0,
                     l.estado || 'pendiente'
                 );
 
                 if (l.detalles && Array.isArray(l.detalles)) {
                     for (const d of l.detalles) {
                         stmtDetalleLista.run(
-                            d.id,
+                            d.id || require('crypto').randomUUID(),
                             listaId,
-                            d.producto_id,
-                            d.cantidad_pedir || d.cantidad || 0,
-                            d.costo_unitario || 0
+                            d.producto_id || d.productoId || '',
+                            (d.cantidad_pedir !== undefined && d.cantidad_pedir !== null) ? Number(d.cantidad_pedir) : ((d.cantidad !== undefined && d.cantidad !== null) ? Number(d.cantidad) : 0),
+                            (d.costo_unitario !== undefined && d.costo_unitario !== null) ? Number(d.costo_unitario) : 0
                         );
                     }
                 }
-            }
-
-            // G. Registrar Analytics Events
-            for (const a of analyticsEvents) {
-                const data = a.data;
-                let fechaSql = new Date().toISOString();
-                if (data.timestamp) {
-                    if (data.timestamp.seconds) {
-                        fechaSql = new Date(data.timestamp.seconds * 1000).toISOString();
-                    } else if (typeof data.timestamp === 'string') {
-                        fechaSql = new Date(data.timestamp).toISOString();
-                    }
-                }
-                const extraData = { ...data };
-                delete extraData.timestamp;
-                delete extraData.type;
-                stmtAnalytics.run(
-                    a.id,
-                    data.type || 'unknown',
-                    fechaSql,
-                    Object.keys(extraData).length > 0 ? JSON.stringify(extraData) : null
-                );
             }
         });
         
@@ -881,5 +1107,7 @@ module.exports = {
     descargarDatosDesdeNube,
     obtenerDashboardData,
     crearUsuarioAuth,
-    buildAuthEmail
+    buildAuthEmail,
+    repararEmbeddingsNube,
+    limpiarArchivosHuerfanosStorage
 };

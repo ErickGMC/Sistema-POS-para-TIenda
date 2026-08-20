@@ -56,12 +56,14 @@ contextBridge.exposeInMainWorld('electron', {
   actualizarBanner: (banner) => ipcRenderer.invoke('db:actualizarBanner', banner),
   eliminarBanner: (id) => ipcRenderer.invoke('db:eliminarBanner', id),
   
-  // Analytics & Dashboard
-  obtenerAnalytics: () => ipcRenderer.invoke('sync:obtenerAnalytics'),
+  // Dashboard Data
   obtenerDashboardData: (tsInicioObj, strInicio) => ipcRenderer.invoke('sync:obtenerDashboardData', tsInicioObj, strInicio),
 
   // Compras / Listas de Reabastecimiento
   guardarListaCompra: (lista, detalles) => ipcRenderer.invoke('db:guardarListaCompra', lista, detalles),
   obtenerListasCompras: () => ipcRenderer.invoke('db:obtenerListasCompras'),
-  eliminarListaCompra: (id) => ipcRenderer.invoke('db:eliminarListaCompra', id)
+  eliminarListaCompra: (id) => ipcRenderer.invoke('db:eliminarListaCompra', id),
+
+  // Storage Maintenance
+  limpiarArchivosHuerfanos: () => ipcRenderer.invoke('storage:limpiarArchivosHuerfanos')
 });

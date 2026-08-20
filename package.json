@@ -1,19 +1,21 @@
 {
   "name": "tienda-pos",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Sistema POS y Punto de Venta para Minimarket Flor",
+  "author": "Minimarket Flor",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
     "dev:vite": "vite",
     "dev:electron": "wait-on tcp:5173 && cross-env NODE_ENV=development electron .",
-    "predev": "node electron/clean.cjs",
+    "clean": "node electron/clean.cjs",
     "dev": "concurrently -k \"npm run dev:vite\" \"npm run dev:electron\"",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
     "pack": "electron-builder --dir",
-    "dist": "npm run build && electron-builder"
+    "dist": "node scripts/build_installer.cjs"
   },
   "build": {
     "appId": "com.minimarketflor.pos",
@@ -29,10 +31,19 @@
       "package.json"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Minimarket POS"
     }
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "better-sqlite3": "^12.11.1",
     "firebase": "^12.15.0",
     "jspdf": "^4.2.1",
@@ -46,7 +57,6 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
-    "@google/generative-ai": "^0.24.1",
     "@tailwindcss/vite": "^4.3.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.13.2",

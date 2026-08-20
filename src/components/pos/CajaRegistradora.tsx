@@ -10,7 +10,7 @@ export default function CajaRegistradora() {
     actualizarCantidad, actualizarPrecioItem, limpiarCarrito, clienteTelefono, setClienteTelefono
   } = usePosStore();
   const [codigoTerm, setCodigoTerm] = useState('');
-  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
   const [mensaje, setMensaje] = useState('');
   const [errorCobro, setErrorCobro] = useState('');
   const [suggestions, setSuggestions] = useState<any[]>([]);
@@ -52,8 +52,14 @@ export default function CajaRegistradora() {
   const cargarDestacados = async () => {
     try {
       const results = await (window as any).electron.obtenerTodosProductos();
-      const destacados = results.filter((p: any) => p.destacado);
-      setSuggestions(destacados || []);
+      const ordenados = [...(results || [])].sort((a: any, b: any) => {
+        const destA = a.destacado ? 1 : 0;
+        const destB = b.destacado ? 1 : 0;
+        if (destB !== destA) return destB - destA;
+        return (a.nombre || '').localeCompare(b.nombre || '');
+      });
+      const disponibles = ordenados.filter((p: any) => p.disponible !== 0 && p.disponible !== false);
+      setSuggestions(disponibles.length > 0 ? disponibles : (results || []));
       setSelectedIndex(0);
     } catch {
       setSuggestions([]);
@@ -408,7 +414,7 @@ export default function CajaRegistradora() {
         {/* Sugerencias de Búsqueda */}
         <div className={`flex-1 overflow-y-auto bg-white custom-scrollbar-light-light-light ${viewMode === 'grid' ? 'p-4' : ''}`}>
           {suggestions.length > 0 ? (
-            <div className={viewMode === 'grid' ? 'grid grid-cols-3 lg:grid-cols-4 gap-2' : 'flex flex-col divide-y divide-slate-200'}>
+            <div className={viewMode === 'grid' ? 'grid grid-cols-3 lg:grid-cols-4 gap-3' : 'flex flex-col divide-y divide-slate-200'}>
               {suggestions.map((prod, idx) => {
                 const isSelected = idx === selectedIndex;
                 return viewMode === 'list' ? (
@@ -427,24 +433,34 @@ export default function CajaRegistradora() {
                       }
                       inputRef.current?.focus();
                     }}
-                    className={`px-4 py-2 flex items-center justify-between cursor-pointer transition-colors ${
-                      isSelected ? 'bg-emerald-600/20 hover:bg-emerald-600/30' : 'hover:bg-slate-100/50'
+                    className={`px-4 py-2.5 flex items-center justify-between cursor-pointer transition-colors ${
+                      isSelected ? 'bg-emerald-600/20 hover:bg-emerald-600/30' : 'hover:bg-slate-100/70'
                     }`}
                   >
-                    <div className="flex-1 min-w-0 pr-4">
-                      <div className={`font-semibold text-sm truncate ${isSelected ? 'text-emerald-600' : 'text-slate-800'}`}>
-                        {prod.nombre}
+                    <div className="flex items-center gap-3 flex-1 min-w-0 pr-4">
+                      <div className="w-12 h-12 rounded-xl bg-white border border-slate-250 p-1 flex-shrink-0 flex items-center justify-center overflow-hidden shadow-sm">
+                        {prod.imagenLocal || prod.imagenUrl ? (
+                          <img src={prod.imagenLocal || prod.imagenUrl} alt={prod.nombre} className="w-full h-full object-contain" />
+                        ) : (
+                          <ImageIcon size={20} className="text-slate-400" />
+                        )}
                       </div>
-                      <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-2 min-w-0">
-                        <span className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-600 flex-shrink-0 font-mono">{prod.codigoBarras || 'S/C'}</span>
-                        <span className="truncate">{prod.descripcion || 'Sin descripción'}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className={`font-semibold text-sm truncate ${isSelected ? 'text-emerald-600' : 'text-slate-800'}`}>
+                          {prod.nombre}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-2 min-w-0">
+                          <span className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-600 flex-shrink-0 font-mono text-[10px]">{prod.codigoBarras || 'S/C'}</span>
+                          <span className="bg-emerald-50 text-emerald-700 font-medium px-1.5 py-0.5 rounded text-[10px]">{prod.categoria}</span>
+                          <span className="truncate text-slate-400">{prod.descripcion || ''}</span>
+                        </div>
                       </div>
                     </div>
                     <div className="text-right flex-shrink-0 flex items-center gap-4">
-                      <div className={`text-xs font-medium ${isSelected ? 'text-emerald-600' : 'text-slate-600'}`}>
+                      <div className={`text-xs font-semibold px-2 py-1 rounded-md ${prod.stock < 10 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'}`}>
                         Stk: {prod.stock}
                       </div>
-                      <div className={`font-bold text-base w-20 ${isSelected ? 'text-emerald-600' : 'text-slate-800'}`}>
+                      <div className={`font-black text-base w-24 text-right ${isSelected ? 'text-emerald-600' : 'text-slate-900'}`}>
                         S/ {prod.precio.toFixed(2)}
                       </div>
                     </div>
@@ -465,34 +481,44 @@ export default function CajaRegistradora() {
                       }
                       inputRef.current?.focus();
                     }}
-                    className={`flex flex-col bg-slate-100 rounded-xl overflow-hidden cursor-pointer border transition-all ${
-                      isSelected ? 'border-emerald-500 shadow-lg shadow-emerald-500/20 scale-[1.02]' : 'border-slate-300 hover:border-slate-300 hover:scale-[1.01]'
+                    className={`flex flex-col bg-white rounded-2xl overflow-hidden cursor-pointer border transition-all duration-200 shadow-sm hover:shadow-md ${
+                      isSelected ? 'border-emerald-500 ring-2 ring-emerald-500/30 scale-[1.02]' : 'border-slate-250 hover:border-slate-400 hover:scale-[1.01]'
                     }`}
                   >
-                    <div className="h-24 w-full bg-white relative">
+                    <div className="h-28 w-full bg-slate-50 relative flex items-center justify-center p-2 border-b border-slate-200/70">
                       {(prod.imagenLocal || prod.imagenUrl) ? (
-                        <img src={prod.imagenLocal || prod.imagenUrl} alt={prod.nombre} className="w-full h-full object-contain" />
+                        <img 
+                          src={prod.imagenLocal || prod.imagenUrl} 
+                          alt={prod.nombre} 
+                          className="w-full h-full object-contain transition-transform hover:scale-105" 
+                          loading="lazy"
+                        />
                       ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center text-slate-600">
-                          <ImageIcon size={32} className="mb-2 opacity-50" />
-                          <span className="text-xs font-medium">Sin Imagen</span>
+                        <div className="w-full h-full flex flex-col items-center justify-center text-slate-400">
+                          <ImageIcon size={28} className="mb-1 opacity-60" />
+                          <span className="text-[10px] font-medium text-slate-400">Sin Imagen</span>
                         </div>
                       )}
-                      <div className="absolute top-2 right-2 bg-slate-50/80 backdrop-blur-sm text-slate-700 text-xs px-2 py-1 rounded-md font-mono border border-slate-300/50">
+                      <div className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm text-slate-700 text-[10px] px-1.5 py-0.5 rounded-md font-mono border border-slate-300 shadow-sm">
                         {prod.codigoBarras || 'S/C'}
                       </div>
+                      {prod.categoria && (
+                        <div className="absolute bottom-1.5 left-2 bg-emerald-50/90 text-emerald-700 text-[9px] font-bold px-1.5 py-0.5 rounded border border-emerald-200">
+                          {prod.categoria}
+                        </div>
+                      )}
                     </div>
                     
-                    <div className="p-3 flex flex-col flex-1">
-                      <div className={`font-bold text-sm mb-1 line-clamp-2 ${isSelected ? 'text-emerald-600' : 'text-slate-800'}`}>
+                    <div className="p-3 flex flex-col flex-1 justify-between bg-white">
+                      <div className={`font-bold text-xs sm:text-sm line-clamp-2 leading-tight ${isSelected ? 'text-emerald-600' : 'text-slate-800'}`} title={prod.nombre}>
                         {prod.nombre}
                       </div>
-                      <div className="mt-auto pt-2 flex justify-between items-end border-t border-slate-300/50">
+                      <div className="pt-2 flex justify-between items-end border-t border-slate-100 mt-2">
                         <div className="flex flex-col">
-                          <span className="text-xs text-slate-500 uppercase tracking-wider">Precio</span>
-                          <span className="font-black text-sm text-emerald-600">S/ {prod.precio.toFixed(2)}</span>
+                          <span className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Precio</span>
+                          <span className="font-black text-sm sm:text-base text-emerald-600">S/ {prod.precio.toFixed(2)}</span>
                         </div>
-                        <div className={`text-xs font-medium px-2 py-1 rounded bg-white ${isSelected ? 'text-emerald-600' : 'text-slate-600'}`}>
+                        <div className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${prod.stock < 10 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'}`}>
                           Stk: {prod.stock}
                         </div>
                       </div>

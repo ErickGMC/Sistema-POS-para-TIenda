@@ -45,6 +45,7 @@ export default function GestionUsuarios() {
   const [form, setForm] = useState({
     id: '',
     username: '',
+    email: '',
     password: '',
     role: 'colaborador' as 'admin' | 'colaborador',
     permisos: [] as string[],
@@ -92,7 +93,8 @@ export default function GestionUsuarios() {
       
       const payloadUser = {
         id: editMode ? form.id : window.crypto.randomUUID(),
-        username: form.username,
+        username: form.username.trim(),
+        email: form.email ? form.email.trim() : null,
         role: form.role,
         permisos: form.role === 'admin' ? PERMISOS_DISPONIBLES.map(p => p.id) : form.permisos,
         activo: form.activo
@@ -145,6 +147,7 @@ export default function GestionUsuarios() {
     const newForm = {
       id: u.id,
       username: u.username,
+      email: u.email || '',
       password: '',
       role: u.role,
       permisos: u.permisos || [],
@@ -160,6 +163,7 @@ export default function GestionUsuarios() {
     setForm({ 
       id: '', 
       username: '', 
+      email: '',
       password: '', 
       role: 'colaborador', 
       permisos: [], 
@@ -169,7 +173,7 @@ export default function GestionUsuarios() {
   };
 
   const isModified = !editMode || JSON.stringify(form) !== JSON.stringify(originalForm);
-  const isValid = form.username.length >= 3 && (!editMode ? form.password.length >= 6 : true);
+  const isValid = form.username.length >= 2 && (!editMode ? form.password.length >= 6 : true);
   const canSubmit = isModified && isValid && !submitting && !successSaved;
 
   return (
@@ -212,6 +216,9 @@ export default function GestionUsuarios() {
                           <h3 className="font-bold text-lg text-slate-900 flex items-center gap-2">
                             {u.username}
                           </h3>
+                          {u.email && (
+                            <p className="text-xs text-slate-500 font-medium -mt-0.5 mb-1">{u.email}</p>
+                          )}
                           
                           <div className="flex flex-wrap gap-1.5 mt-1">
                             <span className={`text-[10px] px-2 py-0.5 rounded-full ${
@@ -306,7 +313,18 @@ export default function GestionUsuarios() {
                 value={form.username} 
                 onChange={e => setForm({...form, username: e.target.value})} 
                 className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-xl p-3 text-slate-900 focus:border-blue-500 outline-none transition-colors shadow-sm text-sm" 
-                placeholder="ej: cajero1"
+                placeholder="ej: cajero1 o Flor"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">Correo Electrónico (Firebase Auth)</label>
+              <input 
+                type="email" 
+                value={form.email} 
+                onChange={e => setForm({...form, email: e.target.value})} 
+                className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-xl p-3 text-slate-900 focus:border-blue-500 outline-none transition-colors shadow-sm text-sm" 
+                placeholder="ej: colaborador@minimarket.com"
               />
             </div>
 

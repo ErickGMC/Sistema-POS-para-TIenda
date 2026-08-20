@@ -4,6 +4,7 @@ import { persist } from 'zustand/middleware';
 export interface Usuario {
   id: string;
   username: string;
+  email?: string | null;
   role: 'admin' | 'colaborador';
   permisos: string[];
   activo?: boolean;

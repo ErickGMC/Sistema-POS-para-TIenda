@@ -58,10 +58,16 @@ CREATE TABLE IF NOT EXISTS sync_queue (
     intentos INTEGER DEFAULT 0
 );
 
+-- Índice compuesto crítico para el patrón UPSERT en sync_queue:
+-- Evita scans completos al buscar entradas pendientes por entidad/entidad_id.
+CREATE INDEX IF NOT EXISTS idx_sync_queue_entidad_estado 
+    ON sync_queue(entidad, entidad_id, estado_sync);
+
 -- Tabla de Usuarios (Autenticación y RBAC)
 CREATE TABLE IF NOT EXISTS usuarios (
     id TEXT PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
+    email TEXT,
     password_hash TEXT NOT NULL,
     salt TEXT NOT NULL,
     role TEXT NOT NULL, -- 'admin', 'colaborador'
@@ -115,12 +121,4 @@ CREATE TABLE IF NOT EXISTS compras_listas_detalle (
     costo_unitario REAL,
     FOREIGN KEY(lista_id) REFERENCES compras_listas(id),
     FOREIGN KEY(producto_id) REFERENCES productos(id)
-);
-
--- Eventos Analíticos de la Tienda Web
-CREATE TABLE IF NOT EXISTS analytics_events (
-    id TEXT PRIMARY KEY,
-    type TEXT NOT NULL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    data TEXT
 );

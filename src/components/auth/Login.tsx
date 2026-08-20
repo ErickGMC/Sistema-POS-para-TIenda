@@ -25,20 +25,20 @@ export default function Login() {
 
   // Traduce errores del backend a mensajes amigables para el usuario
   const traducirError = (errorMsg: string): string => {
-    const lower = errorMsg.toLowerCase();
+    const lower = (errorMsg || '').toLowerCase();
     if (lower.includes('network') || lower.includes('fetch') || lower.includes('conexión') || lower.includes('enotfound') || lower.includes('timeout')) {
       return 'No se pudo conectar con el servidor. Verifica tu conexión a internet e intenta nuevamente.';
     }
-    if (lower.includes('usuario incorrecto') || lower.includes('contraseña incorrecta') || lower.includes('credenciales')) {
-      return errorMsg; // Ya son mensajes claros del backend
+    if (lower.includes('contraseña') || lower.includes('usuario') || lower.includes('credenciales') || lower.includes('desactivada') || lower.includes('desactivado')) {
+      return errorMsg; // Mensajes claros y descriptivos del backend
     }
-    if (lower.includes('desactivado')) {
-      return errorMsg; // "Usuario desactivado" ya es claro
+    if (lower.includes('too-many-requests') || lower.includes('demasiados intentos')) {
+      return 'Demasiados intentos fallidos. Por seguridad, espera unos minutos antes de volver a intentar.';
     }
-    if (lower.includes('firebase') || lower.includes('auth/')) {
-      return 'Error de autenticación en la nube. Verifica que Firebase esté configurado correctamente.';
+    if (lower.includes('operation-not-allowed')) {
+      return "Debes habilitar 'Correo electrónico/Contraseña' en la sección Authentication de tu consola Firebase.";
     }
-    return errorMsg || 'Ocurrió un error inesperado. Intenta nuevamente.';
+    return errorMsg || 'Ocurrió un error inesperado al iniciar sesión. Intenta nuevamente.';
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -77,19 +77,19 @@ export default function Login() {
               <Store size={28} className="text-slate-900" />
             </div>
             <h1 className="text-xl font-bold text-slate-900 tracking-tight">Sistema POS</h1>
-            <p className="text-slate-600 mt-1 text-center text-xs">Ingresa tus credenciales de Firebase Auth para acceder</p>
+            <p className="text-slate-600 mt-1 text-center text-xs">Ingresa tus credenciales para acceder</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-3">
             {error && (
-              <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-3 rounded-xl text-xs font-medium flex items-start gap-2">
+              <div className="bg-red-500/10 border border-red-500/20 text-red-500 p-3 rounded-xl text-xs font-medium flex items-start gap-2">
                 <span className="shrink-0 mt-0.5">⚠</span>
                 <span>{error}</span>
               </div>
             )}
 
             <div className="space-y-1">
-              <label className="text-sm font-medium text-slate-700 ml-1">Usuario</label>
+              <label className="text-sm font-medium text-slate-700 ml-1">Correo o Usuario</label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
                   <User size={18} />
@@ -101,7 +101,7 @@ export default function Login() {
                   value={username}
                   onChange={e => setUsername(e.target.value)}
                   className="w-full bg-white border border-slate-350 hover:border-slate-400 focus:border-emerald-500 rounded-xl py-2.5 pl-10 pr-4 text-slate-900 outline-none transition-all text-sm shadow-sm"
-                  placeholder="tu nombre de usuario"
+                  placeholder="ej. erickmartinezc@gmail.com o Erick Martinez"
                 />
               </div>
             </div>

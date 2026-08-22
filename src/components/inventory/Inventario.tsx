@@ -30,6 +30,7 @@ export default function Inventario() {
   const [busqueda, setBusqueda] = useState('');
   const [categoriaFiltro, setCategoriaFiltro] = useState<string>('TODAS');
   const [stockFiltro, setStockFiltro] = useState<'TODOS' | 'EN_STOCK' | 'BAJO' | 'SIN_STOCK'>('TODOS');
+  const [visibilidadFiltro, setVisibilidadFiltro] = useState<'TODOS' | 'VISIBLE' | 'OCULTO'>('TODOS');
   const [ordenarPor, setOrdenarPor] = useState<
     'nombre_asc' | 'nombre_desc' | 'categoria_asc' | 'categoria_desc' | 'precio_asc' | 'precio_desc' | 'stock_asc' | 'stock_desc'
   >('nombre_asc');
@@ -253,7 +254,12 @@ export default function Inventario() {
         stockFiltro === 'SIN_STOCK' ? (p.stock || 0) <= 0 :
         (p.stock || 0) >= 10;
       
-      return matchText && matchCat && matchStock;
+      const matchVisibilidad = 
+        visibilidadFiltro === 'TODOS' ? true :
+        visibilidadFiltro === 'VISIBLE' ? Boolean(p.disponible) :
+        !Boolean(p.disponible);
+      
+      return matchText && matchCat && matchStock && matchVisibilidad;
     });
 
     list.sort((a, b) => {
@@ -280,7 +286,7 @@ export default function Inventario() {
     });
 
     return list;
-  }, [productos, busqueda, categoriaFiltro, stockFiltro, ordenarPor]);
+  }, [productos, busqueda, categoriaFiltro, stockFiltro, visibilidadFiltro, ordenarPor]);
 
   const handleSortColumn = (col: 'nombre' | 'categoria' | 'precio' | 'stock') => {
     if (col === 'nombre') {
@@ -298,10 +304,11 @@ export default function Inventario() {
     setBusqueda('');
     setCategoriaFiltro('TODAS');
     setStockFiltro('TODOS');
+    setVisibilidadFiltro('TODOS');
     setOrdenarPor('nombre_asc');
   };
 
-  const isFilterActive = busqueda !== '' || categoriaFiltro !== 'TODAS' || stockFiltro !== 'TODOS' || ordenarPor !== 'nombre_asc';
+  const isFilterActive = busqueda !== '' || categoriaFiltro !== 'TODAS' || stockFiltro !== 'TODOS' || visibilidadFiltro !== 'TODOS' || ordenarPor !== 'nombre_asc';
 
   const isValid = Boolean(
     form.nombre && form.nombre.trim() !== '' && 
@@ -688,6 +695,20 @@ export default function Inventario() {
                 <option value="EN_STOCK">Stock Normal (≥10)</option>
                 <option value="BAJO">Stock Bajo (&lt;10)</option>
                 <option value="SIN_STOCK">Agotados (0)</option>
+              </select>
+            </div>
+
+            {/* Filtro Visibilidad Web */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-500">Web:</span>
+              <select
+                value={visibilidadFiltro}
+                onChange={e => setVisibilidadFiltro(e.target.value as any)}
+                className="bg-slate-50 border border-slate-300 hover:border-slate-400 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-800 focus:border-emerald-500 outline-none cursor-pointer"
+              >
+                <option value="TODOS">Todos (Visibles y Ocultos)</option>
+                <option value="VISIBLE">🟢 Visibles en Web ({productos.filter(p => Boolean(p.disponible)).length})</option>
+                <option value="OCULTO">⚪ Ocultos ({productos.filter(p => !Boolean(p.disponible)).length})</option>
               </select>
             </div>
 

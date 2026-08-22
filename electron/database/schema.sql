@@ -15,7 +15,11 @@ CREATE TABLE IF NOT EXISTS productos (
     thumbnailLocal TEXT,
     disponible INTEGER DEFAULT 1, 
     destacado INTEGER DEFAULT 0,
-    etiquetas TEXT 
+    etiquetas TEXT,
+    esPrincipalWeb INTEGER DEFAULT 0,
+    productoPadreId TEXT,
+    etiquetaVariante TEXT,
+    mostrarPrecioWeb INTEGER DEFAULT 0
 );
 
 -- Índices críticos para rendimiento ultrarrápido (<10ms)

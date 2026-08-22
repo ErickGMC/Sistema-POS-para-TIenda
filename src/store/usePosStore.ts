@@ -15,6 +15,10 @@ export interface Producto {
   disponible: boolean;
   destacado: boolean;
   etiquetas?: string[] | string;
+  esPrincipalWeb?: boolean;
+  productoPadreId?: string;
+  etiquetaVariante?: string;
+  mostrarPrecioWeb?: boolean;
 }
 
 export interface ItemCarrito {

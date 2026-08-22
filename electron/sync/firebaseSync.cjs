@@ -926,7 +926,7 @@ async function descargarDatosDesdeNube() {
         console.log("Descarga de red completada con éxito. Escribiendo de forma atómica en SQLite...");
 
         // 7. Guardar en SQLite en UNA SOLA TRANSACCIÓN ATÓMICA
-        const stmtInsertProd = db.prepare('INSERT OR REPLACE INTO productos (id, codigoBarras, nombre, descripcion, categoria, precio, costo, stock, unidadMedida, imagenUrl, thumbnailUrl, imagenLocal, thumbnailLocal, disponible, destacado, etiquetas) VALUES (@id, @codigoBarras, @nombre, @descripcion, @categoria, @precio, @costo, @stock, @unidadMedida, @imagenUrl, @thumbnailUrl, @imagenLocal, @thumbnailLocal, @disponible, @destacado, @etiquetas)');
+        const stmtInsertProd = db.prepare('INSERT OR REPLACE INTO productos (id, codigoBarras, nombre, descripcion, categoria, precio, costo, stock, unidadMedida, imagenUrl, thumbnailUrl, imagenLocal, thumbnailLocal, disponible, destacado, etiquetas, esPrincipalWeb, productoPadreId, etiquetaVariante, mostrarPrecioWeb) VALUES (@id, @codigoBarras, @nombre, @descripcion, @categoria, @precio, @costo, @stock, @unidadMedida, @imagenUrl, @thumbnailUrl, @imagenLocal, @thumbnailLocal, @disponible, @destacado, @etiquetas, @esPrincipalWeb, @productoPadreId, @etiquetaVariante, @mostrarPrecioWeb)');
         const stmtCheckUser = db.prepare('SELECT password_hash, salt FROM usuarios WHERE id = ? OR username = ? OR (email IS NOT NULL AND LOWER(email) = LOWER(?))');
         const stmtUser = db.prepare('INSERT OR REPLACE INTO usuarios (id, username, email, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
         const stmtBanner = db.prepare('INSERT OR REPLACE INTO banners (id, title, subtitle, imageUrl, imagenLocal, badgeText, ctaText, ctaActionCategory, active, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
@@ -988,7 +988,11 @@ async function descargarDatosDesdeNube() {
                     thumbnailLocal: toStrOrNull(p.thumbnailLocal),
                     disponible: (p.disponible !== false && p.disponible !== 0 && p.disponible !== '0') ? 1 : 0,
                     destacado: (p.destacado === true || p.destacado === 1 || p.destacado === '1' || p.destacado === 'true') ? 1 : 0,
-                    etiquetas: p.etiquetas ? (typeof p.etiquetas === 'string' ? p.etiquetas : JSON.stringify(p.etiquetas)) : null
+                    etiquetas: p.etiquetas ? (typeof p.etiquetas === 'string' ? p.etiquetas : JSON.stringify(p.etiquetas)) : null,
+                    esPrincipalWeb: (p.esPrincipalWeb === true || p.esPrincipalWeb === 1 || p.esPrincipalWeb === '1' || p.esPrincipalWeb === 'true') ? 1 : 0,
+                    productoPadreId: toStrOrNull(p.productoPadreId),
+                    etiquetaVariante: toStrOrNull(p.etiquetaVariante),
+                    mostrarPrecioWeb: (p.mostrarPrecioWeb === true || p.mostrarPrecioWeb === 1 || p.mostrarPrecioWeb === '1' || p.mostrarPrecioWeb === 'true') ? 1 : 0
                 });
             }
 

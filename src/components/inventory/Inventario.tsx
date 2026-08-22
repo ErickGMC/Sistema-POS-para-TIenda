@@ -43,6 +43,10 @@ export default function Inventario() {
     unidadMedida: 'unidad',
     disponible: true,
     destacado: false,
+    esPrincipalWeb: false,
+    productoPadreId: '',
+    etiquetaVariante: '',
+    mostrarPrecioWeb: false,
     precio: 0,
     costo: 0,
     stock: 0,
@@ -93,6 +97,10 @@ export default function Inventario() {
       unidadMedida: 'unidad',
       disponible: true,
       destacado: false,
+      esPrincipalWeb: false,
+      productoPadreId: '',
+      etiquetaVariante: '',
+      mostrarPrecioWeb: false,
       precio: 0,
       costo: 0,
       stock: 0,
@@ -111,7 +119,14 @@ export default function Inventario() {
     } else if (Array.isArray(prod.etiquetas)) {
       parsedEtiquetas = prod.etiquetas;
     }
-    const editForm = {...prod, etiquetas: parsedEtiquetas};
+    const editForm = {
+      ...prod, 
+      etiquetas: parsedEtiquetas,
+      esPrincipalWeb: Boolean(prod.esPrincipalWeb),
+      productoPadreId: prod.productoPadreId || '',
+      etiquetaVariante: prod.etiquetaVariante || '',
+      mostrarPrecioWeb: Boolean(prod.mostrarPrecioWeb)
+    };
     setForm(editForm);
     setOriginalForm(editForm);
     window.scrollTo(0, 0);
@@ -442,6 +457,83 @@ export default function Inventario() {
               ) : null}
             </div>
 
+            {/* Configuración de Catálogo Web y Familias */}
+            <div className="pt-2 border-t border-slate-200 space-y-2.5">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input 
+                  type="checkbox" 
+                  checked={Boolean(form.esPrincipalWeb ?? false)} 
+                  onChange={e => {
+                    const isMain = e.target.checked;
+                    setForm({
+                      ...form, 
+                      esPrincipalWeb: isMain,
+                      productoPadreId: isMain ? '' : form.productoPadreId,
+                      etiquetaVariante: isMain ? '' : form.etiquetaVariante
+                    });
+                  }} 
+                  className="w-4 h-4 accent-amber-500 rounded" 
+                />
+                <span className="text-slate-800 text-xs font-bold flex items-center gap-1">
+                  ⭐ Es Producto Principal / Familia Web
+                </span>
+              </label>
+
+              {form.esPrincipalWeb ? (
+                <div className="p-2.5 bg-amber-50/80 border border-amber-200 rounded-xl space-y-2 text-xs">
+                  <p className="text-[11px] text-amber-900 leading-tight">
+                    🖼️ <strong>Foto y Portada Familiar:</strong> Este ítem llevará la foto compuesta de todas las presentaciones y representará a la línea de producto en la web.
+                  </p>
+                  <label className="flex items-center gap-2 cursor-pointer pt-1 border-t border-amber-200/60">
+                    <input 
+                      type="checkbox" 
+                      checked={Boolean(form.mostrarPrecioWeb ?? false)} 
+                      onChange={e => setForm({...form, mostrarPrecioWeb: e.target.checked})} 
+                      className="w-4 h-4 accent-emerald-500 rounded" 
+                    />
+                    <span className="text-slate-700 font-semibold text-xs">
+                      Mostrar precios de esta familia en la web
+                    </span>
+                  </label>
+                </div>
+              ) : (
+                <div className="p-2.5 bg-slate-100 border border-slate-250 rounded-xl space-y-2">
+                  <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider">
+                    Vincular a Familia / Producto Web:
+                  </label>
+                  <select
+                    value={form.productoPadreId || ''}
+                    onChange={e => setForm({...form, productoPadreId: e.target.value})}
+                    className="w-full bg-white border border-slate-350 rounded-lg p-2 text-xs text-slate-900 font-medium focus:border-emerald-500 outline-none"
+                  >
+                    <option value="">-- Producto Independiente (Sin Familia) --</option>
+                    {productos
+                      .filter(p => p.id !== form.id && (p.esPrincipalWeb || !p.productoPadreId))
+                      .map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.nombre} {p.esPrincipalWeb ? '⭐ (Familia Web)' : ''}
+                        </option>
+                      ))}
+                  </select>
+
+                  {form.productoPadreId ? (
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                        Nombre de esta Presentación en Web:
+                      </label>
+                      <input 
+                        type="text" 
+                        placeholder="Ej: 295ml Vidrio, 500ml Pet, 3L Familiar" 
+                        value={form.etiquetaVariante || ''} 
+                        onChange={e => setForm({...form, etiquetaVariante: e.target.value})} 
+                        className="w-full bg-white border border-slate-350 rounded-lg p-1.5 text-xs text-slate-900 focus:border-emerald-500 outline-none"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+
             <div className="flex flex-col gap-2 pt-2 border-t border-slate-200">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={Boolean(form.disponible ?? true)} onChange={e => setForm({...form, disponible: e.target.checked})} className="w-4 h-4 accent-emerald-500 rounded" />
@@ -752,9 +844,20 @@ export default function Inventario() {
                     </div>
                   </td>
                   <td className="py-2 px-3">
-                    {prod.disponible 
-                      ? <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full text-[11px] font-semibold border border-emerald-200">Visible</span>
-                      : <span className="text-slate-500 bg-slate-50 px-2 py-0.5 rounded-full text-[11px] font-semibold border border-slate-200">Oculto</span>}
+                    <div className="flex flex-col gap-0.5 items-start">
+                      {prod.esPrincipalWeb ? (
+                        <span className="text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded text-[10px] font-extrabold border border-amber-300">
+                          ⭐ Familia Web
+                        </span>
+                      ) : prod.productoPadreId ? (
+                        <span className="text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded text-[10px] font-medium border border-purple-200">
+                          🔗 {prod.etiquetaVariante || 'Variante'}
+                        </span>
+                      ) : null}
+                      {prod.disponible 
+                        ? <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] font-semibold border border-emerald-200">Visible</span>
+                        : <span className="text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded text-[10px] font-semibold border border-slate-200">Oculto</span>}
+                    </div>
                   </td>
                   <td className="py-2 px-3">
                     <div className="flex items-center justify-end gap-2">

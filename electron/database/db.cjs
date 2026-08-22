@@ -63,6 +63,14 @@ const migrations = [
     () => {
         db.exec("ALTER TABLE usuarios ADD COLUMN email TEXT");
         db.exec("CREATE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email)");
+    },
+    // Version 10 — Catálogo Web / Familias de Productos y Control de Precios
+    () => {
+        db.exec("ALTER TABLE productos ADD COLUMN esPrincipalWeb INTEGER DEFAULT 0");
+        db.exec("ALTER TABLE productos ADD COLUMN productoPadreId TEXT");
+        db.exec("ALTER TABLE productos ADD COLUMN etiquetaVariante TEXT");
+        db.exec("ALTER TABLE productos ADD COLUMN mostrarPrecioWeb INTEGER DEFAULT 0");
+        db.exec("CREATE INDEX IF NOT EXISTS idx_productos_padre ON productos(productoPadreId)");
     }
 ];
 
@@ -119,8 +127,16 @@ function obtenerTodosProductos() {
 function crearProducto(producto, isFromSync = false) {
     try {
         const stmt = db.prepare(`
-            INSERT INTO productos (id, codigoBarras, nombre, descripcion, categoria, precio, costo, stock, unidadMedida, imagenUrl, thumbnailUrl, imagenLocal, thumbnailLocal, disponible, destacado, etiquetas) 
-            VALUES (@id, @codigoBarras, @nombre, @descripcion, @categoria, @precio, @costo, @stock, @unidadMedida, @imagenUrl, @thumbnailUrl, @imagenLocal, @thumbnailLocal, @disponible, @destacado, @etiquetas)
+            INSERT INTO productos (
+                id, codigoBarras, nombre, descripcion, categoria, precio, costo, stock, 
+                unidadMedida, imagenUrl, thumbnailUrl, imagenLocal, thumbnailLocal, 
+                disponible, destacado, etiquetas, esPrincipalWeb, productoPadreId, etiquetaVariante, mostrarPrecioWeb
+            ) 
+            VALUES (
+                @id, @codigoBarras, @nombre, @descripcion, @categoria, @precio, @costo, @stock, 
+                @unidadMedida, @imagenUrl, @thumbnailUrl, @imagenLocal, @thumbnailLocal, 
+                @disponible, @destacado, @etiquetas, @esPrincipalWeb, @productoPadreId, @etiquetaVariante, @mostrarPrecioWeb
+            )
         `);
         
         const data = {
@@ -139,15 +155,25 @@ function crearProducto(producto, isFromSync = false) {
             thumbnailLocal: producto.thumbnailLocal || null,
             disponible: producto.disponible ? 1 : 0,
             destacado: producto.destacado ? 1 : 0,
-            etiquetas: producto.etiquetas ? JSON.stringify(producto.etiquetas) : null
+            etiquetas: producto.etiquetas ? JSON.stringify(producto.etiquetas) : null,
+            esPrincipalWeb: producto.esPrincipalWeb ? 1 : 0,
+            productoPadreId: producto.productoPadreId || null,
+            etiquetaVariante: producto.etiquetaVariante || null,
+            mostrarPrecioWeb: producto.mostrarPrecioWeb ? 1 : 0
         };
         
         stmt.run(data);
         
         // Agregar a Sync Queue solo si no viene de Firestore.
-        // Normalizar disponible/destacado a booleanos en el payload de Firebase.
+        // Normalizar booleans en el payload de Firebase.
         if (!isFromSync) {
-            const syncData = { ...data, disponible: Boolean(data.disponible), destacado: Boolean(data.destacado) };
+            const syncData = { 
+                ...data, 
+                disponible: Boolean(data.disponible), 
+                destacado: Boolean(data.destacado),
+                esPrincipalWeb: Boolean(data.esPrincipalWeb),
+                mostrarPrecioWeb: Boolean(data.mostrarPrecioWeb)
+            };
             db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
                 'producto', data.id, 'INSERT', JSON.stringify(syncData)
             );
@@ -167,7 +193,9 @@ function actualizarProducto(producto, isFromSync = false) {
                 categoria = @categoria, precio = @precio, costo = @costo, stock = @stock, 
                 unidadMedida = @unidadMedida, imagenUrl = @imagenUrl, thumbnailUrl = @thumbnailUrl, 
                 imagenLocal = @imagenLocal, thumbnailLocal = @thumbnailLocal, disponible = @disponible, 
-                destacado = @destacado, etiquetas = @etiquetas
+                destacado = @destacado, etiquetas = @etiquetas, esPrincipalWeb = @esPrincipalWeb,
+                productoPadreId = @productoPadreId, etiquetaVariante = @etiquetaVariante,
+                mostrarPrecioWeb = @mostrarPrecioWeb
             WHERE id = @id
         `);
         
@@ -187,7 +215,11 @@ function actualizarProducto(producto, isFromSync = false) {
             thumbnailLocal: producto.thumbnailLocal || null,
             disponible: producto.disponible ? 1 : 0,
             destacado: producto.destacado ? 1 : 0,
-            etiquetas: producto.etiquetas ? JSON.stringify(producto.etiquetas) : null
+            etiquetas: producto.etiquetas ? JSON.stringify(producto.etiquetas) : null,
+            esPrincipalWeb: producto.esPrincipalWeb ? 1 : 0,
+            productoPadreId: producto.productoPadreId || null,
+            etiquetaVariante: producto.etiquetaVariante || null,
+            mostrarPrecioWeb: producto.mostrarPrecioWeb ? 1 : 0
         };
         
         const info = stmt.run(data);
@@ -197,7 +229,13 @@ function actualizarProducto(producto, isFromSync = false) {
             // UPSERT: si ya existe una entrada pendiente para este producto, actualizarla
             // en lugar de insertar otra — evita múltiples writes a Firestore por la misma entidad.
             if (!isFromSync) {
-                const syncData = { ...data, disponible: Boolean(data.disponible), destacado: Boolean(data.destacado) };
+                const syncData = { 
+                    ...data, 
+                    disponible: Boolean(data.disponible), 
+                    destacado: Boolean(data.destacado),
+                    esPrincipalWeb: Boolean(data.esPrincipalWeb),
+                    mostrarPrecioWeb: Boolean(data.mostrarPrecioWeb)
+                };
                 const syncPayload = JSON.stringify(syncData);
                 const existing = db.prepare(
                     "SELECT id FROM sync_queue WHERE entidad = 'producto' AND entidad_id = ? AND estado_sync = 0 ORDER BY fecha_creacion DESC LIMIT 1"
@@ -218,6 +256,9 @@ function actualizarProducto(producto, isFromSync = false) {
             return { success: false, error: 'Producto no encontrado' };
         }
     } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
         return { success: false, error: err.message };
     }
 }

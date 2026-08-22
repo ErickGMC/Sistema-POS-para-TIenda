@@ -39,6 +39,10 @@ const ProductoSchema = z.object({
   thumbnailLocal: z.string().nullable().optional(),
   disponible: coerceBool(true),
   destacado: coerceBool(false),
+  esPrincipalWeb: coerceBool(false),
+  productoPadreId: z.string().nullable().optional(),
+  etiquetaVariante: z.string().nullable().optional(),
+  mostrarPrecioWeb: coerceBool(false),
   etiquetas: z.any().transform(val => {
     if (Array.isArray(val)) return val;
     if (typeof val === 'string') {

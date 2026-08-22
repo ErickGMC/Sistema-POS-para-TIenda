@@ -259,9 +259,6 @@ function actualizarProducto(producto, isFromSync = false) {
         return { success: false, error: err.message };
     }
 }
-        return { success: false, error: err.message };
-    }
-}
 
 function eliminarProducto(id, isFromSync = false) {
     try {

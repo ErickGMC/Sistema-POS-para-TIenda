@@ -71,6 +71,11 @@ const migrations = [
         db.exec("ALTER TABLE productos ADD COLUMN etiquetaVariante TEXT");
         db.exec("ALTER TABLE productos ADD COLUMN mostrarPrecioWeb INTEGER DEFAULT 0");
         db.exec("CREATE INDEX IF NOT EXISTS idx_productos_padre ON productos(productoPadreId)");
+    },
+    // Version 11 — Por defecto no disponibles en web excepto entes de familia
+    () => {
+        db.exec("UPDATE productos SET disponible = 0 WHERE (esPrincipalWeb = 0 OR esPrincipalWeb IS NULL)");
+        db.exec("UPDATE productos SET disponible = 1 WHERE esPrincipalWeb = 1");
     }
 ];
 
@@ -97,12 +102,11 @@ if (currentVersion < migrations.length) {
 
 // --- Funciones CRUD de Productos ---
 
-const stmtBuscarProductoPorCodigo = db.prepare('SELECT * FROM productos WHERE codigoBarras = ?');
+const stmtBuscarProductoPorCodigo = db.prepare('SELECT * FROM productos WHERE codigoBarras = ? AND (esPrincipalWeb = 0 OR esPrincipalWeb IS NULL)');
 const stmtBuscarProductosPorNombre = db.prepare(`
     SELECT * FROM productos 
-    WHERE nombre LIKE ? 
-       OR descripcion LIKE ? 
-       OR codigoBarras LIKE ? 
+    WHERE (nombre LIKE ? OR descripcion LIKE ? OR codigoBarras LIKE ?)
+      AND (esPrincipalWeb = 0 OR esPrincipalWeb IS NULL)
     LIMIT 20
 `);
 
@@ -113,6 +117,16 @@ function buscarProductoPorCodigo(codigo) {
 function buscarProductosPorNombre(nombre) {
     const term = `%${nombre}%`;
     return stmtBuscarProductosPorNombre.all(term, term, term);
+}
+
+function obtenerProductosParaVenta() {
+    return db.prepare(`
+        SELECT p.*
+        FROM productos p 
+        WHERE (p.esPrincipalWeb = 0 OR p.esPrincipalWeb IS NULL)
+          AND (p.disponible = 1 OR p.disponible IS NULL)
+        ORDER BY p.destacado DESC, p.nombre ASC
+    `).all();
 }
 
 function obtenerTodosProductos() {
@@ -271,6 +285,9 @@ function eliminarProducto(id, isFromSync = false) {
         const info = db.prepare('DELETE FROM productos WHERE id = ?').run(id);
         
         if (info.changes > 0) {
+            // Si el producto era una familia padre, desvincular a sus hijos
+            db.prepare('UPDATE productos SET productoPadreId = NULL, etiquetaVariante = NULL WHERE productoPadreId = ?').run(id);
+            
             // Agregar a Sync Queue solo si no viene de Firestore
             if (!isFromSync) {
                 db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
@@ -282,6 +299,82 @@ function eliminarProducto(id, isFromSync = false) {
             return { success: false, error: 'Producto no encontrado' };
         }
     } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
+function obtenerPresentacionesDeFamilia(familiaId) {
+    try {
+        return db.prepare('SELECT * FROM productos WHERE productoPadreId = ? ORDER BY nombre ASC').all(familiaId);
+    } catch (err) {
+        console.error('Error en obtenerPresentacionesDeFamilia:', err);
+        return [];
+    }
+}
+
+function guardarFamiliaConPresentaciones(familiaData, presentaciones = []) {
+    try {
+        const tx = db.transaction(() => {
+            const familiaId = familiaData.id || require('crypto').randomUUID();
+            const productoFamilia = {
+                ...familiaData,
+                id: familiaId,
+                codigoBarras: null,
+                esPrincipalWeb: 1,
+                precio: Number(familiaData.precio || 0),
+                costo: null,
+                stock: Number(familiaData.stock || 0),
+                unidadMedida: familiaData.unidadMedida || 'unidad',
+                disponible: familiaData.disponible !== false ? 1 : 0,
+                destacado: familiaData.destacado ? 1 : 0,
+                mostrarPrecioWeb: familiaData.mostrarPrecioWeb ? 1 : 0,
+                productoPadreId: null,
+                etiquetaVariante: null
+            };
+
+            const existing = db.prepare('SELECT id FROM productos WHERE id = ?').get(familiaId);
+            if (existing) {
+                actualizarProducto(productoFamilia);
+            } else {
+                crearProducto(productoFamilia);
+            }
+
+            // 1. Obtener los productos que estaban asociados a esta familia antes
+            const anteriores = db.prepare('SELECT id FROM productos WHERE productoPadreId = ?').all(familiaId);
+            const nuevosIds = new Set(presentaciones.map(p => p.id));
+
+            // 2. Desvincular los que ya no están
+            for (const ant of anteriores) {
+                if (!nuevosIds.has(ant.id)) {
+                    db.prepare('UPDATE productos SET productoPadreId = NULL, etiquetaVariante = NULL WHERE id = ?').run(ant.id);
+                    const prodActualizado = db.prepare('SELECT * FROM productos WHERE id = ?').get(ant.id);
+                    if (prodActualizado) {
+                        actualizarProducto(prodActualizado);
+                    }
+                }
+            }
+
+            // 3. Vincular y actualizar etiqueta de las presentaciones actuales
+            for (const pres of presentaciones) {
+                if (pres.id && pres.id !== familiaId) {
+                    db.prepare('UPDATE productos SET productoPadreId = ?, etiquetaVariante = ? WHERE id = ?').run(
+                        familiaId,
+                        pres.etiquetaVariante || null,
+                        pres.id
+                    );
+                    const prodActualizado = db.prepare('SELECT * FROM productos WHERE id = ?').get(pres.id);
+                    if (prodActualizado) {
+                        actualizarProducto(prodActualizado);
+                    }
+                }
+            }
+
+            return { success: true, id: familiaId };
+        });
+
+        return tx();
+    } catch (err) {
+        console.error('Error en guardarFamiliaConPresentaciones:', err);
         return { success: false, error: err.message };
     }
 }
@@ -967,7 +1060,10 @@ module.exports = {
     db,
     buscarProductoPorCodigo,
     buscarProductosPorNombre,
+    obtenerProductosParaVenta,
     obtenerTodosProductos,
+    obtenerPresentacionesDeFamilia,
+    guardarFamiliaConPresentaciones,
     crearProducto,
     actualizarProducto,
     eliminarProducto,

@@ -443,6 +443,10 @@ async function sincronizarCola() {
                         // Normalizar tipos: disponible y destacado deben ser booleanos en Firestore
                         finalData.disponible = finalData.disponible === true || finalData.disponible === 1 || finalData.disponible === '1';
                         finalData.destacado = finalData.destacado === true || finalData.destacado === 1 || finalData.destacado === '1';
+                        finalData.esPrincipalWeb = finalData.esPrincipalWeb === true || finalData.esPrincipalWeb === 1 || finalData.esPrincipalWeb === '1';
+                        finalData.mostrarPrecioWeb = finalData.mostrarPrecioWeb === true || finalData.mostrarPrecioWeb === 1 || finalData.mostrarPrecioWeb === '1';
+                        finalData.productoPadreId = finalData.productoPadreId ? String(finalData.productoPadreId).trim() : null;
+                        finalData.etiquetaVariante = finalData.etiquetaVariante ? String(finalData.etiquetaVariante).trim() : null;
                         
                         // Normalizar etiquetas a array limpio de strings
                         finalData.etiquetas = parsearEtiquetasSync(finalData.etiquetas);

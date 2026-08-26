@@ -51,15 +51,20 @@ export default function CajaRegistradora() {
 
   const cargarDestacados = async () => {
     try {
-      const results = await (window as any).electron.obtenerTodosProductos();
-      const ordenados = [...(results || [])].sort((a: any, b: any) => {
+      let results = [];
+      if (typeof (window as any).electron?.obtenerProductosParaVenta === 'function') {
+        results = await (window as any).electron.obtenerProductosParaVenta();
+      } else {
+        results = await (window as any).electron.obtenerTodosProductos();
+      }
+      const vendibles = (results || []).filter((p: any) => !p.esPrincipalWeb && p.disponible !== 0 && p.disponible !== false);
+      const ordenados = [...vendibles].sort((a: any, b: any) => {
         const destA = a.destacado ? 1 : 0;
         const destB = b.destacado ? 1 : 0;
         if (destB !== destA) return destB - destA;
         return (a.nombre || '').localeCompare(b.nombre || '');
       });
-      const disponibles = ordenados.filter((p: any) => p.disponible !== 0 && p.disponible !== false);
-      setSuggestions(disponibles.length > 0 ? disponibles : (results || []));
+      setSuggestions(ordenados);
       setSelectedIndex(0);
     } catch {
       setSuggestions([]);
@@ -77,7 +82,8 @@ export default function CajaRegistradora() {
       if (term.trim().length >= 2) {
         try {
           const results = await (window as any).electron.buscarProductosPorNombre(term);
-          setSuggestions(results || []);
+          const vendibles = (results || []).filter((p: any) => !p.esPrincipalWeb);
+          setSuggestions(vendibles);
           setSelectedIndex(0);
         } catch (err) {
           console.error(err);
@@ -171,6 +177,10 @@ export default function CajaRegistradora() {
       }
       
       if (producto) {
+        if (producto.esPrincipalWeb) {
+          mostrarMensaje(`"${producto.nombre}" es una Familia Web y no un ítem vendible en caja.`);
+          return;
+        }
         if (producto.stock <= 0) {
           mostrarMensaje(`Advertencia: ${producto.nombre} no cuenta con stock (Stk: 0).`);
         }

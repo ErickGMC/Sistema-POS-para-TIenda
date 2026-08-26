@@ -4,6 +4,62 @@ if (typeof window !== 'undefined' && !(window as any).electron) {
   // In-memory mock DB
 const mockProducts = [
     {
+        "id": "fam-incakola-orig",
+        "codigoBarras": null,
+        "nombre": "Inca Kola Sabor Original",
+        "descripcion": "Gaseosa peruana dorada sabor original con gas refrescante en botella para compartir",
+        "categoria": "Bebidas",
+        "precio": 0,
+        "costo": null,
+        "stock": 0,
+        "unidadMedida": "unidad",
+        "imagenUrl": "https://firebasestorage.googleapis.com/v0/b/minimarket-flor-8d7f9.firebasestorage.app/o/productos%2FBEB-W5IW.webp?alt=media&token=d3a160f5-03c4-4c19-9356-74350eaf8894",
+        "thumbnailUrl": null,
+        "disponible": true,
+        "destacado": true,
+        "etiquetas": ["gaseosa", "bebida", "refresco", "dorada"],
+        "esPrincipalWeb": true,
+        "mostrarPrecioWeb": true
+    },
+    {
+        "id": "prod-incakola-500ml",
+        "codigoBarras": "7750106001014",
+        "nombre": "Inca Kola 500ml Pet",
+        "descripcion": "Inca kola 500ml botella personal descartable",
+        "categoria": "Bebidas",
+        "precio": 3.0,
+        "costo": 2.2,
+        "stock": 35,
+        "unidadMedida": "unidad",
+        "imagenUrl": "https://firebasestorage.googleapis.com/v0/b/minimarket-flor-8d7f9.firebasestorage.app/o/productos%2FBEB-W5IW.webp?alt=media&token=d3a160f5-03c4-4c19-9356-74350eaf8894",
+        "thumbnailUrl": null,
+        "disponible": false,
+        "destacado": false,
+        "etiquetas": [],
+        "esPrincipalWeb": false,
+        "productoPadreId": "fam-incakola-orig",
+        "etiquetaVariante": "500ml Personal"
+    },
+    {
+        "id": "prod-incakola-1500ml",
+        "codigoBarras": "7750106001021",
+        "nombre": "Inca Kola 1.5L Familiar",
+        "descripcion": "Inca kola 1.5 litros botella mediana descartable",
+        "categoria": "Bebidas",
+        "precio": 7.5,
+        "costo": 5.8,
+        "stock": 20,
+        "unidadMedida": "unidad",
+        "imagenUrl": "https://firebasestorage.googleapis.com/v0/b/minimarket-flor-8d7f9.firebasestorage.app/o/productos%2FBEB-W5IW.webp?alt=media&token=d3a160f5-03c4-4c19-9356-74350eaf8894",
+        "thumbnailUrl": null,
+        "disponible": false,
+        "destacado": false,
+        "etiquetas": [],
+        "esPrincipalWeb": false,
+        "productoPadreId": "fam-incakola-orig",
+        "etiquetaVariante": "1.5L Familiar"
+    },
+    {
         "id": "ac0e9cd6-24ca-4454-be5f-9e5d8b3f6612",
         "codigoBarras": null,
         "nombre": "Aceituna Entera",
@@ -635,16 +691,65 @@ const mockProducts = [
 
   (window as any).electron = {
     openExternal: async (url: string) => console.log('Mock openExternal:', url),
-    buscarProductoPorCodigo: async (codigo: string) => mockProducts.find(p => p.codigoBarras === codigo) || null,
-    buscarProductosPorNombre: async (nombre: string) => mockProducts.filter(p => p.nombre.toLowerCase().includes(nombre.toLowerCase())),
+    buscarProductoPorCodigo: async (codigo: string) => mockProducts.find(p => p.codigoBarras === codigo && !p.esPrincipalWeb) || null,
+    buscarProductosPorNombre: async (nombre: string) => mockProducts.filter(p => !p.esPrincipalWeb && (p.nombre.toLowerCase().includes(nombre.toLowerCase()) || (p.descripcion && p.descripcion.toLowerCase().includes(nombre.toLowerCase())))),
     obtenerTodosProductos: async () => mockProducts,
-    crearProducto: async (p: any) => { mockProducts.push(p); return { success: true }; },
+    obtenerProductosParaVenta: async () => mockProducts.filter(p => !p.esPrincipalWeb && p.disponible !== false),
+    obtenerPresentacionesDeFamilia: async (familiaId: string) => mockProducts.filter(p => p.productoPadreId === familiaId),
+    guardarFamiliaConPresentaciones: async ({ familia, presentaciones }: { familia: any; presentaciones: any[] }) => {
+      const familiaId = familia.id || `fam-${Date.now()}`;
+      const productoFamilia = {
+        ...familia,
+        id: familiaId,
+        codigoBarras: null,
+        esPrincipalWeb: true,
+        precio: Number(familia.precio || 0),
+        stock: Number(familia.stock || 0),
+        disponible: familia.disponible !== false,
+        mostrarPrecioWeb: Boolean(familia.mostrarPrecioWeb)
+      };
+
+      const existingIdx = mockProducts.findIndex(p => p.id === familiaId);
+      if (existingIdx !== -1) {
+        mockProducts[existingIdx] = { ...mockProducts[existingIdx], ...productoFamilia };
+      } else {
+        mockProducts.push(productoFamilia);
+      }
+
+      // Desvincular anteriores
+      const nuevosIds = new Set((presentaciones || []).map(p => p.id));
+      mockProducts.forEach(p => {
+        if (p.productoPadreId === familiaId && !nuevosIds.has(p.id)) {
+          p.productoPadreId = undefined;
+          p.etiquetaVariante = undefined;
+        }
+      });
+
+      // Vincular nuevas presentaciones
+      (presentaciones || []).forEach(pres => {
+        const prod = mockProducts.find(p => p.id === pres.id);
+        if (prod && prod.id !== familiaId) {
+          prod.productoPadreId = familiaId;
+          prod.etiquetaVariante = pres.etiquetaVariante || '';
+        }
+      });
+
+      return { success: true, id: familiaId };
+    },
+    crearProducto: async (p: any) => { mockProducts.push(p); return { success: true, id: p.id || `prod-${Date.now()}` }; },
     actualizarProducto: async (p: any) => {
       const idx = mockProducts.findIndex(x => x.id === p.id);
       if (idx !== -1) mockProducts[idx] = { ...mockProducts[idx], ...p };
       return { success: true };
     },
     eliminarProducto: async (id: string) => {
+      // Si era familia, desvincular hijos
+      mockProducts.forEach(p => {
+        if (p.productoPadreId === id) {
+          (p as any).productoPadreId = undefined;
+          (p as any).etiquetaVariante = undefined;
+        }
+      });
       const idx = mockProducts.findIndex(x => x.id === id);
       if (idx !== -1) mockProducts.splice(idx, 1);
       return { success: true };

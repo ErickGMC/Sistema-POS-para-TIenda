@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import type { Producto } from '../../store/usePosStore';
 import { 
   Edit2, Trash2, Image as ImageIcon, Check, X, Search, AlertCircle, CheckCircle,
-  ArrowUpDown, ArrowUp, ArrowDown, Package, AlertTriangle, Layers, DollarSign, RotateCcw
+  ArrowUpDown, ArrowUp, ArrowDown, Package, AlertTriangle, Layers, DollarSign, RotateCcw,
+  Plus, Sparkles
 } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import ListaCompras from './ListaCompras';
@@ -31,18 +32,19 @@ export default function Inventario() {
   const [categoriaFiltro, setCategoriaFiltro] = useState<string>('TODAS');
   const [stockFiltro, setStockFiltro] = useState<'TODOS' | 'EN_STOCK' | 'BAJO' | 'SIN_STOCK'>('TODOS');
   const [visibilidadFiltro, setVisibilidadFiltro] = useState<'TODOS' | 'VISIBLE' | 'OCULTO'>('TODOS');
+  const [tipoFiltro, setTipoFiltro] = useState<'TODOS' | 'VENDIBLES' | 'FAMILIAS'>('TODOS');
   const [ordenarPor, setOrdenarPor] = useState<
     'nombre_asc' | 'nombre_desc' | 'categoria_asc' | 'categoria_desc' | 'precio_asc' | 'precio_desc' | 'stock_asc' | 'stock_desc'
   >('nombre_asc');
   const [activeTab, setActiveTab] = useState<'gestion' | 'compras'>('gestion');
   
-  // Estado del Formulario
+  // Estado del Formulario de Producto Individual
   const [isEditing, setIsEditing] = useState(false);
   const [form, setForm] = useState<Partial<Producto>>({
     id: window.crypto.randomUUID(),
     categoria: 'Abarrotes',
     unidadMedida: 'unidad',
-    disponible: true,
+    disponible: false,
     destacado: false,
     esPrincipalWeb: false,
     productoPadreId: '',
@@ -59,6 +61,35 @@ export default function Inventario() {
   const [mensaje, setMensaje] = useState<{ texto: string; tipo: 'success' | 'error' | 'info' } | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── ESTADO DEL GESTOR / MODAL DE FAMILIA WEB ──
+  const [modalFamiliaOpen, setModalFamiliaOpen] = useState(false);
+  const [familiaForm, setFamiliaForm] = useState<{
+    id?: string;
+    nombre: string;
+    descripcion: string;
+    categoria: string;
+    imagenLocal?: string;
+    imagenUrl?: string;
+    disponible: boolean;
+    destacado: boolean;
+    mostrarPrecioWeb: boolean;
+    etiquetas?: string[];
+  }>({
+    nombre: '',
+    descripcion: '',
+    categoria: 'Abarrotes',
+    disponible: true,
+    destacado: false,
+    mostrarPrecioWeb: true,
+    etiquetas: []
+  });
+  const [familiaPresentaciones, setFamiliaPresentaciones] = useState<
+    Array<{ id: string; nombre: string; etiquetaVariante: string; precio: number; stock: number; unidadMedida?: string }>
+  >([]);
+  const [busquedaPresentacion, setBusquedaPresentacion] = useState('');
+  const [guardandoFamilia, setGuardandoFamilia] = useState(false);
+  const familiaFileInputRef = useRef<HTMLInputElement>(null);
 
   const mostrarMensaje = (texto: string, tipo: 'success' | 'error' | 'info' = 'info', duracion = 5000) => {
     setMensaje({ texto, tipo });
@@ -96,7 +127,7 @@ export default function Inventario() {
       id: window.crypto.randomUUID(),
       categoria: 'Abarrotes',
       unidadMedida: 'unidad',
-      disponible: true,
+      disponible: false,
       destacado: false,
       esPrincipalWeb: false,
       productoPadreId: '',
@@ -112,7 +143,64 @@ export default function Inventario() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  const abrirCrearFamilia = () => {
+    setFamiliaForm({
+      id: window.crypto.randomUUID(),
+      nombre: '',
+      descripcion: '',
+      categoria: 'Abarrotes',
+      disponible: true,
+      destacado: false,
+      mostrarPrecioWeb: true,
+      etiquetas: []
+    });
+    setFamiliaPresentaciones([]);
+    setBusquedaPresentacion('');
+    setModalFamiliaOpen(true);
+  };
+
+  const abrirEditarFamilia = async (fam: Producto) => {
+    let presList: any[] = [];
+    if (typeof (window as any).electron?.obtenerPresentacionesDeFamilia === 'function') {
+      presList = await (window as any).electron.obtenerPresentacionesDeFamilia(fam.id);
+    } else {
+      presList = productos.filter(p => p.productoPadreId === fam.id);
+    }
+
+    setFamiliaForm({
+      id: fam.id,
+      nombre: fam.nombre || '',
+      descripcion: fam.descripcion || '',
+      categoria: fam.categoria || 'Abarrotes',
+      imagenLocal: fam.imagenLocal,
+      imagenUrl: fam.imagenUrl,
+      disponible: fam.disponible !== false,
+      destacado: Boolean(fam.destacado),
+      mostrarPrecioWeb: Boolean(fam.mostrarPrecioWeb),
+      etiquetas: Array.isArray(fam.etiquetas) ? fam.etiquetas : []
+    });
+
+    setFamiliaPresentaciones(
+      (presList || []).map((p: any) => ({
+        id: p.id,
+        nombre: p.nombre,
+        etiquetaVariante: p.etiquetaVariante || p.nombre,
+        precio: p.precio || 0,
+        stock: p.stock || 0,
+        unidadMedida: p.unidadMedida || 'unidad'
+      }))
+    );
+
+    setBusquedaPresentacion('');
+    setModalFamiliaOpen(true);
+  };
+
   const handleEdit = (prod: Producto) => {
+    if (prod.esPrincipalWeb) {
+      abrirEditarFamilia(prod);
+      return;
+    }
+
     setIsEditing(true);
     let parsedEtiquetas: string[] = [];
     if (typeof prod.etiquetas === 'string') {
@@ -187,6 +275,86 @@ export default function Inventario() {
     }
   };
 
+  const handleImageFamiliaChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const file = e.target.files[0];
+      setGuardandoFamilia(true);
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const res = await (window as any).electron.procesarImagenLocal(arrayBuffer, file.name, 'producto');
+        if (res.success) {
+          setFamiliaForm(prev => ({ ...prev, imagenLocal: res.base64, imagenUrl: undefined }));
+          mostrarMensaje('Imagen de la familia web guardada localmente', 'success');
+        } else {
+          mostrarMensaje('Error procesando imagen: ' + res.error, 'error');
+        }
+      } catch (err) {
+        mostrarMensaje('Error al procesar la imagen.', 'error');
+      } finally {
+        setGuardandoFamilia(false);
+      }
+    }
+  };
+
+  const handleGuardarFamilia = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!familiaForm.nombre.trim()) {
+      mostrarMensaje('El nombre de la familia web es obligatorio', 'error');
+      return;
+    }
+
+    setGuardandoFamilia(true);
+    try {
+      const res = await (window as any).electron.guardarFamiliaConPresentaciones(
+        familiaForm,
+        familiaPresentaciones
+      );
+      if (res.success) {
+        mostrarMensaje('Familia web guardada exitosamente', 'success');
+        setModalFamiliaOpen(false);
+        await cargarProductos();
+      } else {
+        mostrarMensaje(traducirError(res.error || 'Error al guardar familia'), 'error');
+      }
+    } catch (err: any) {
+      mostrarMensaje('Error guardando familia: ' + err.message, 'error');
+    } finally {
+      setGuardandoFamilia(false);
+    }
+  };
+
+  const agregarPresentacionAFamilia = (prod: Producto) => {
+    if (familiaPresentaciones.some(p => p.id === prod.id)) return;
+    
+    const nombreFamilia = familiaForm.nombre.trim();
+    let etiquetaSugerida = prod.nombre;
+    if (nombreFamilia) {
+      const regex = new RegExp(`^${nombreFamilia}\\s*[-–:]?\\s*`, 'i');
+      const limpia = prod.nombre.replace(regex, '').trim();
+      if (limpia) etiquetaSugerida = limpia;
+    }
+
+    setFamiliaPresentaciones(prev => [
+      ...prev,
+      {
+        id: prod.id,
+        nombre: prod.nombre,
+        etiquetaVariante: etiquetaSugerida,
+        precio: prod.precio || 0,
+        stock: prod.stock || 0,
+        unidadMedida: prod.unidadMedida || 'unidad'
+      }
+    ]);
+  };
+
+  const removerPresentacionDeFamilia = (id: string) => {
+    setFamiliaPresentaciones(prev => prev.filter(p => p.id !== id));
+  };
+
+  const actualizarEtiquetaPresentacion = (id: string, nuevaEtiqueta: string) => {
+    setFamiliaPresentaciones(prev => prev.map(p => p.id === id ? { ...p, etiquetaVariante: nuevaEtiqueta } : p));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -235,9 +403,10 @@ export default function Inventario() {
   }, [productos]);
 
   const totalRegistrados = productos.length;
-  const totalStockBajo = useMemo(() => productos.filter(p => (p.stock || 0) < 10 && (p.stock || 0) > 0).length, [productos]);
-  const totalSinStock = useMemo(() => productos.filter(p => (p.stock || 0) <= 0).length, [productos]);
-  const valorTotalInventario = useMemo(() => productos.reduce((acc, p) => acc + ((p.precio || 0) * (p.stock || 0)), 0), [productos]);
+  const totalStockBajo = useMemo(() => productos.filter(p => !p.esPrincipalWeb && (p.stock || 0) < 10 && (p.stock || 0) > 0).length, [productos]);
+  const totalSinStock = useMemo(() => productos.filter(p => !p.esPrincipalWeb && (p.stock || 0) <= 0).length, [productos]);
+  const valorTotalInventario = useMemo(() => productos.filter(p => !p.esPrincipalWeb).reduce((acc, p) => acc + ((p.precio || 0) * (p.stock || 0)), 0), [productos]);
+  const totalFamilias = useMemo(() => productos.filter(p => Boolean(p.esPrincipalWeb)).length, [productos]);
 
   const filteredProductos = useMemo(() => {
     const term = busqueda.trim().toLowerCase();
@@ -259,7 +428,12 @@ export default function Inventario() {
         visibilidadFiltro === 'VISIBLE' ? Boolean(p.disponible) :
         !Boolean(p.disponible);
       
-      return matchText && matchCat && matchStock && matchVisibilidad;
+      const matchTipo = 
+        tipoFiltro === 'TODOS' ? true :
+        tipoFiltro === 'VENDIBLES' ? !p.esPrincipalWeb :
+        Boolean(p.esPrincipalWeb);
+      
+      return matchText && matchCat && matchStock && matchVisibilidad && matchTipo;
     });
 
     list.sort((a, b) => {
@@ -286,7 +460,7 @@ export default function Inventario() {
     });
 
     return list;
-  }, [productos, busqueda, categoriaFiltro, stockFiltro, visibilidadFiltro, ordenarPor]);
+  }, [productos, busqueda, categoriaFiltro, stockFiltro, visibilidadFiltro, tipoFiltro, ordenarPor]);
 
   const handleSortColumn = (col: 'nombre' | 'categoria' | 'precio' | 'stock') => {
     if (col === 'nombre') {
@@ -321,21 +495,35 @@ export default function Inventario() {
 
   return (
     <div className="flex flex-col h-screen bg-white text-slate-900 overflow-hidden">
-      {/* Header with Tabs */}
-      <div className="px-5 py-3 flex items-center gap-6 border-b border-slate-300 flex-shrink-0 bg-slate-100">
-        <h1 className="text-xl font-bold text-slate-900 mr-2">Inventario</h1>
-        <button 
-          onClick={() => setActiveTab('gestion')}
-          className={`pb-2 px-3 text-sm font-semibold transition-colors border-b-2 ${activeTab === 'gestion' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-600 hover:text-slate-800'}`}
-        >
-          Gestión de Productos
-        </button>
-        <button 
-          onClick={() => setActiveTab('compras')}
-          className={`pb-2 px-3 text-sm font-semibold transition-colors border-b-2 ${activeTab === 'compras' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-600 hover:text-slate-800'}`}
-        >
-          Lista de Compras
-        </button>
+      {/* Header with Tabs & Actions */}
+      <div className="px-5 py-2.5 flex items-center justify-between border-b border-slate-300 flex-shrink-0 bg-slate-100">
+        <div className="flex items-center gap-6">
+          <h1 className="text-xl font-bold text-slate-900 mr-2">Inventario</h1>
+          <button 
+            onClick={() => setActiveTab('gestion')}
+            className={`pb-2 px-3 text-sm font-semibold transition-colors border-b-2 ${activeTab === 'gestion' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-600 hover:text-slate-800'}`}
+          >
+            Gestión de Productos
+          </button>
+          <button 
+            onClick={() => setActiveTab('compras')}
+            className={`pb-2 px-3 text-sm font-semibold transition-colors border-b-2 ${activeTab === 'compras' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-600 hover:text-slate-800'}`}
+          >
+            Lista de Compras
+          </button>
+        </div>
+
+        {activeTab === 'gestion' && (
+          <button
+            type="button"
+            onClick={abrirCrearFamilia}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-xs font-bold rounded-xl shadow-sm transition-all duration-200 cursor-pointer active:scale-95"
+            title="Crear un ente que agrupa presentaciones con imagen única para la tienda online"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>+ Nueva Familia Web</span>
+          </button>
+        )}
       </div>
 
       {activeTab === 'gestion' ? (
@@ -464,82 +652,7 @@ export default function Inventario() {
               ) : null}
             </div>
 
-            {/* Configuración de Catálogo Web y Familias */}
-            <div className="pt-2 border-t border-slate-200 space-y-2.5">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  checked={Boolean(form.esPrincipalWeb ?? false)} 
-                  onChange={e => {
-                    const isMain = e.target.checked;
-                    setForm({
-                      ...form, 
-                      esPrincipalWeb: isMain,
-                      productoPadreId: isMain ? '' : form.productoPadreId,
-                      etiquetaVariante: isMain ? '' : form.etiquetaVariante
-                    });
-                  }} 
-                  className="w-4 h-4 accent-amber-500 rounded" 
-                />
-                <span className="text-slate-800 text-xs font-bold flex items-center gap-1">
-                  ⭐ Es Producto Principal / Familia Web
-                </span>
-              </label>
-
-              {form.esPrincipalWeb ? (
-                <div className="p-2.5 bg-amber-50/80 border border-amber-200 rounded-xl space-y-2 text-xs">
-                  <p className="text-[11px] text-amber-900 leading-tight">
-                    🖼️ <strong>Foto y Portada Familiar:</strong> Este ítem llevará la foto compuesta de todas las presentaciones y representará a la línea de producto en la web.
-                  </p>
-                  <label className="flex items-center gap-2 cursor-pointer pt-1 border-t border-amber-200/60">
-                    <input 
-                      type="checkbox" 
-                      checked={Boolean(form.mostrarPrecioWeb ?? false)} 
-                      onChange={e => setForm({...form, mostrarPrecioWeb: e.target.checked})} 
-                      className="w-4 h-4 accent-emerald-500 rounded" 
-                    />
-                    <span className="text-slate-700 font-semibold text-xs">
-                      Mostrar precios de esta familia en la web
-                    </span>
-                  </label>
-                </div>
-              ) : (
-                <div className="p-2.5 bg-slate-100 border border-slate-250 rounded-xl space-y-2">
-                  <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider">
-                    Vincular a Familia / Producto Web:
-                  </label>
-                  <select
-                    value={form.productoPadreId || ''}
-                    onChange={e => setForm({...form, productoPadreId: e.target.value})}
-                    className="w-full bg-white border border-slate-350 rounded-lg p-2 text-xs text-slate-900 font-medium focus:border-emerald-500 outline-none"
-                  >
-                    <option value="">-- Producto Independiente (Sin Familia) --</option>
-                    {productos
-                      .filter(p => p.id !== form.id && (p.esPrincipalWeb || !p.productoPadreId))
-                      .map(p => (
-                        <option key={p.id} value={p.id}>
-                          {p.nombre} {p.esPrincipalWeb ? '⭐ (Familia Web)' : ''}
-                        </option>
-                      ))}
-                  </select>
-
-                  {form.productoPadreId ? (
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                        Nombre de esta Presentación en Web:
-                      </label>
-                      <input 
-                        type="text" 
-                        placeholder="Ej: 295ml Vidrio, 500ml Pet, 3L Familiar" 
-                        value={form.etiquetaVariante || ''} 
-                        onChange={e => setForm({...form, etiquetaVariante: e.target.value})} 
-                        className="w-full bg-white border border-slate-350 rounded-lg p-1.5 text-xs text-slate-900 focus:border-emerald-500 outline-none"
-                      />
-                    </div>
-                  ) : null}
-                </div>
-              )}
-            </div>
+            {/* Opciones de Inventario y Etiquetas */}
 
             <div className="flex flex-col gap-2 pt-2 border-t border-slate-200">
               <label className="flex items-center gap-2 cursor-pointer">
@@ -666,6 +779,20 @@ export default function Inventario() {
 
           {/* Filtros Dropdowns y Selects */}
           <div className="flex items-center gap-2 flex-wrap">
+            {/* Filtro Tipo */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-500">Tipo:</span>
+              <select
+                value={tipoFiltro}
+                onChange={e => setTipoFiltro(e.target.value as any)}
+                className="bg-slate-50 border border-slate-300 hover:border-slate-400 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-800 focus:border-emerald-500 outline-none cursor-pointer"
+              >
+                <option value="TODOS">Todos los Items ({totalRegistrados})</option>
+                <option value="VENDIBLES">🛒 Solo Vendibles POS ({totalRegistrados - totalFamilias})</option>
+                <option value="FAMILIAS">⭐ Familias Web ({totalFamilias})</option>
+              </select>
+            </div>
+
             {/* Filtro Categoría */}
             <div className="flex items-center gap-1.5">
               <span className="text-[11px] font-bold text-slate-500">Cat:</span>
@@ -811,95 +938,138 @@ export default function Inventario() {
               </tr>
             </thead>
             <tbody>
-              {filteredProductos.map((prod) => (
-                <tr key={prod.id} className="border-b border-slate-200 hover:bg-slate-50 transition group even:bg-white odd:bg-slate-50/50">
-                  <td className="py-2 px-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-white border border-slate-250 p-0.5 flex-shrink-0 flex items-center justify-center overflow-hidden shadow-2xs">
-                        {prod.imagenLocal || prod.imagenUrl ? (
-                          <img src={prod.imagenLocal || prod.imagenUrl} alt={prod.nombre} className="w-full h-full object-contain" />
-                        ) : (
-                          <ImageIcon size={18} className="text-slate-400 opacity-60" />
-                        )}
+              {filteredProductos.map((prod) => {
+                const esFamilia = Boolean(prod.esPrincipalWeb);
+                const presentacionesAsignadas = productos.filter(p => p.productoPadreId === prod.id);
+
+                return (
+                  <tr 
+                    key={prod.id} 
+                    className={`border-b border-slate-200 hover:bg-slate-50 transition group ${
+                      esFamilia ? 'bg-amber-50/40 hover:bg-amber-50/70' : 'even:bg-white odd:bg-slate-50/50'
+                    }`}
+                  >
+                    <td className="py-2 px-3">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-lg bg-white border p-0.5 flex-shrink-0 flex items-center justify-center overflow-hidden shadow-2xs ${
+                          esFamilia ? 'border-amber-400 ring-2 ring-amber-400/20' : 'border-slate-250'
+                        }`}>
+                          {prod.imagenLocal || prod.imagenUrl ? (
+                            <img src={prod.imagenLocal || prod.imagenUrl} alt={prod.nombre} className="w-full h-full object-contain" />
+                          ) : (
+                            <ImageIcon size={18} className="text-slate-400 opacity-60" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-bold text-slate-850 text-sm leading-tight flex items-center gap-1.5 flex-wrap">
+                            <span>{prod.nombre}</span>
+                            {esFamilia && (
+                              <span className="text-[10px] bg-amber-500 text-white font-extrabold px-1.5 py-0.2 rounded flex items-center gap-0.5">
+                                <Sparkles size={10} /> Familia ({presentacionesAsignadas.length})
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                            {esFamilia ? (
+                              <span className="text-amber-800 font-semibold">Ente Agrupador (No vendible en POS)</span>
+                            ) : (
+                              prod.codigoBarras || 'S/C'
+                            )}
+                          </div>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <div className="font-bold text-slate-850 text-sm leading-tight">{prod.nombre}</div>
-                        <div className="text-[11px] text-slate-500 font-mono mt-0.5">{prod.codigoBarras || 'S/C'}</div>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="py-2 px-3">
-                    <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md text-xs font-semibold border border-slate-200">
-                      {prod.categoria}
-                    </span>
-                  </td>
-                  <td className="py-2 px-3 font-black text-emerald-600 text-sm">
-                    S/ {prod.precio.toFixed(2)}
-                  </td>
-                  <td className="py-2 px-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold border inline-flex items-center gap-1 ${
-                      prod.stock <= 0 
-                        ? 'bg-rose-50 border-rose-200 text-rose-700 font-extrabold'
-                        : prod.stock < 10 
-                          ? 'bg-amber-50 border-amber-200 text-amber-700 font-bold' 
-                          : 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                    }`}>
-                      {prod.stock <= 0 && <AlertCircle size={11} />}
-                      {prod.stock} {prod.unidadMedida}
-                    </span>
-                  </td>
-                  <td className="py-2 px-3">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] font-bold border border-emerald-200 flex items-center gap-1 flex-shrink-0">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Local
+                    </td>
+                    <td className="py-2 px-3">
+                      <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md text-xs font-semibold border border-slate-200">
+                        {prod.categoria}
                       </span>
-                      {(prod as any).pendienteSync > 0 ? (
-                        <span className="text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded text-[10px] font-bold border border-amber-200 animate-pulse flex items-center gap-1 flex-shrink-0">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span> Pendiente
+                    </td>
+                    <td className="py-2 px-3">
+                      {esFamilia ? (
+                        <span className="text-[11px] text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full font-bold border border-amber-200">
+                          Catálogo Web
                         </span>
                       ) : (
-                        <span className="text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-200 flex items-center gap-1 flex-shrink-0">
-                          <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span> Nube
+                        <span className="font-black text-emerald-600 text-sm">
+                          S/ {prod.precio.toFixed(2)}
                         </span>
                       )}
-                    </div>
-                  </td>
-                  <td className="py-2 px-3">
-                    <div className="flex flex-col gap-0.5 items-start">
-                      {prod.esPrincipalWeb ? (
-                        <span className="text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded text-[10px] font-extrabold border border-amber-300">
-                          ⭐ Familia Web
+                    </td>
+                    <td className="py-2 px-3">
+                      {esFamilia ? (
+                        <span className="text-[11px] text-slate-400 font-semibold italic">
+                          Virtual
                         </span>
-                      ) : prod.productoPadreId ? (
-                        <span className="text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded text-[10px] font-medium border border-purple-200">
-                          🔗 {prod.etiquetaVariante || 'Variante'}
+                      ) : (
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-bold border inline-flex items-center gap-1 ${
+                          prod.stock <= 0 
+                            ? 'bg-rose-50 border-rose-200 text-rose-700 font-extrabold'
+                            : prod.stock < 10 
+                              ? 'bg-amber-50 border-amber-200 text-amber-700 font-bold' 
+                              : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                        }`}>
+                          {prod.stock <= 0 && <AlertCircle size={11} />}
+                          {prod.stock} {prod.unidadMedida}
                         </span>
-                      ) : null}
-                      {prod.disponible 
-                        ? <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] font-semibold border border-emerald-200">Visible</span>
-                        : <span className="text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded text-[10px] font-semibold border border-slate-200">Oculto</span>}
-                    </div>
-                  </td>
-                  <td className="py-2 px-3">
-                    <div className="flex items-center justify-end gap-2">
-                      <button 
-                        onClick={() => handleEdit(prod)} 
-                        className="p-1.5 text-blue-600 bg-blue-50 hover:bg-blue-100 hover:text-blue-700 active:bg-blue-200 rounded-lg transition-colors border border-blue-200 flex items-center justify-center cursor-pointer shadow-2xs"
-                        title="Editar producto"
-                      >
-                        <Edit2 size={14} />
-                      </button>
-                      <button 
-                        onClick={() => handleDelete(prod.id)} 
-                        className="p-1.5 text-rose-600 bg-rose-50 hover:bg-rose-100 hover:text-rose-700 active:bg-rose-200 rounded-lg transition-colors border border-rose-200 flex items-center justify-center cursor-pointer shadow-2xs"
-                        title="Eliminar producto"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                      )}
+                    </td>
+                    <td className="py-2 px-3">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] font-bold border border-emerald-200 flex items-center gap-1 flex-shrink-0">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Local
+                        </span>
+                        {(prod as any).pendienteSync > 0 ? (
+                          <span className="text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded text-[10px] font-bold border border-amber-200 animate-pulse flex items-center gap-1 flex-shrink-0">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span> Pendiente
+                          </span>
+                        ) : (
+                          <span className="text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-200 flex items-center gap-1 flex-shrink-0">
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span> Nube
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="py-2 px-3">
+                      <div className="flex flex-col gap-0.5 items-start">
+                        {esFamilia ? (
+                          <span className="text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded text-[10px] font-extrabold border border-amber-300 flex items-center gap-1">
+                            <Sparkles size={10} /> Familia Web
+                          </span>
+                        ) : prod.productoPadreId ? (
+                          <span className="text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded text-[10px] font-semibold border border-purple-200">
+                            🔗 {prod.etiquetaVariante || 'Presentación'}
+                          </span>
+                        ) : null}
+                        {prod.disponible 
+                          ? <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded text-[10px] font-semibold border border-emerald-200">Visible</span>
+                          : <span className="text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded text-[10px] font-semibold border border-slate-200">Oculto</span>}
+                      </div>
+                    </td>
+                    <td className="py-2 px-3">
+                      <div className="flex items-center justify-end gap-2">
+                        <button 
+                          onClick={() => handleEdit(prod)} 
+                          className={`p-1.5 rounded-lg transition-colors border flex items-center justify-center cursor-pointer shadow-2xs ${
+                            esFamilia 
+                              ? 'text-amber-700 bg-amber-50 hover:bg-amber-100 border-amber-300' 
+                              : 'text-blue-600 bg-blue-50 hover:bg-blue-100 hover:text-blue-700 active:bg-blue-200 border-blue-200'
+                          }`}
+                          title={esFamilia ? 'Editar Familia y Presentaciones' : 'Editar producto'}
+                        >
+                          <Edit2 size={14} />
+                        </button>
+                        <button 
+                          onClick={() => handleDelete(prod.id)} 
+                          className="p-1.5 text-rose-600 bg-rose-50 hover:bg-rose-100 hover:text-rose-700 active:bg-rose-200 rounded-lg transition-colors border border-rose-200 flex items-center justify-center cursor-pointer shadow-2xs"
+                          title="Eliminar producto"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {filteredProductos.length === 0 && (
@@ -922,6 +1092,310 @@ export default function Inventario() {
       ) : (
         <div className="flex-1 overflow-hidden bg-white">
           <ListaCompras productos={productos} />
+        </div>
+      )}
+
+      {/* ── MODAL GESTOR DE FAMILIA WEB ── */}
+      {modalFamiliaOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-scale-in">
+            {/* Modal Header */}
+            <div className="px-6 py-4 bg-gradient-to-r from-amber-500 to-orange-600 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-white/20 rounded-xl backdrop-blur-sm">
+                  <Sparkles className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold">
+                    {familiaForm.id && productos.some(p => p.id === familiaForm.id) ? 'Editar Familia Web' : 'Nueva Familia Web (Ente Agrupador)'}
+                  </h2>
+                  <p className="text-xs text-amber-100 font-medium">
+                    Agrupa múltiples presentaciones bajo una sola imagen representativa para la tienda online. (No vendible en caja).
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalFamiliaOpen(false)}
+                className="p-1.5 rounded-full hover:bg-white/20 text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body: 2 Columnas */}
+            <form onSubmit={handleGuardarFamilia} className="flex-1 flex flex-col overflow-hidden">
+              <div className="flex-1 grid grid-cols-1 md:grid-cols-12 gap-6 p-6 overflow-y-auto custom-scrollbar-light-light-light">
+                
+                {/* Columna Izquierda: Datos y Foto Representativa (5 cols) */}
+                <div className="md:col-span-5 space-y-4">
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3.5">
+                    <span className="block text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">
+                      Datos de la Familia Web
+                    </span>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Nombre de la Línea / Familia <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        required
+                        type="text"
+                        placeholder="Ej: Inca Kola Sabor Original, Arroz Extra Costeño"
+                        value={familiaForm.nombre}
+                        onChange={e => setFamiliaForm({ ...familiaForm, nombre: e.target.value })}
+                        className="w-full bg-white border border-slate-300 rounded-lg p-2 text-sm text-slate-900 font-semibold focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Categoría</label>
+                      <select
+                        value={familiaForm.categoria}
+                        onChange={e => setFamiliaForm({ ...familiaForm, categoria: e.target.value })}
+                        className="w-full bg-white border border-slate-300 rounded-lg p-2 text-sm text-slate-900 font-medium focus:border-amber-500 outline-none cursor-pointer"
+                      >
+                        <option value="Abarrotes">Abarrotes</option>
+                        <option value="Bebidas">Bebidas</option>
+                        <option value="Golosinas">Golosinas</option>
+                        <option value="Verduras">Verduras</option>
+                        <option value="Frutas">Frutas</option>
+                        <option value="Aseo y limpieza">Aseo y limpieza</option>
+                        <option value="Ferreteria y electricidad">Ferreteria y electricidad</option>
+                        <option value="Bazar">Bazar</option>
+                        <option value="Medicina">Medicina</option>
+                        <option value="Libreria">Libreria</option>
+                        <option value="Ocasión y Otros">Ocasión y Otros</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Descripción (para la Web e IA Semántica)
+                      </label>
+                      <textarea
+                        rows={3}
+                        placeholder="Describe el producto general y sus usos (ej: Gaseosa dorada tradicional para acompañar almuerzos familiares)..."
+                        value={familiaForm.descripcion}
+                        onChange={e => setFamiliaForm({ ...familiaForm, descripcion: e.target.value })}
+                        className="w-full bg-white border border-slate-300 rounded-lg p-2 text-xs text-slate-900 focus:border-amber-500 outline-none resize-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Imagen Representativa Única */}
+                  <div className="bg-amber-50/70 p-4 rounded-xl border border-amber-200 space-y-3">
+                    <span className="block text-[11px] font-extrabold text-amber-900 uppercase tracking-wider flex items-center gap-1.5">
+                      <ImageIcon className="w-4 h-4 text-amber-600" />
+                      Imagen Representativa Web
+                    </span>
+                    <p className="text-[11px] text-amber-800 leading-tight">
+                      Esta es la foto principal que se mostrará en el catálogo web para representar a todas las presentaciones de esta familia.
+                    </p>
+
+                    <input
+                      type="file"
+                      accept="image/*"
+                      ref={familiaFileInputRef}
+                      onChange={handleImageFamiliaChange}
+                      className="w-full bg-white border border-amber-300 rounded-lg p-2 text-xs text-slate-700 file:mr-2.5 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-xs file:font-bold file:bg-amber-500 file:text-white hover:file:bg-amber-600 cursor-pointer"
+                    />
+
+                    {familiaForm.imagenLocal || familiaForm.imagenUrl ? (
+                      <div className="flex items-center gap-3 bg-white p-2.5 rounded-lg border border-amber-200">
+                        <img
+                          src={familiaForm.imagenLocal || familiaForm.imagenUrl || ''}
+                          alt="Preview Familia"
+                          className="w-16 h-16 object-cover rounded-lg border border-amber-300"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs text-emerald-700 font-bold flex items-center gap-1">
+                            <Check className="w-3.5 h-3.5" /> Imagen configurada
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setFamiliaForm({ ...familiaForm, imagenLocal: undefined, imagenUrl: undefined })}
+                            className="text-xs text-rose-600 hover:text-rose-800 font-semibold mt-1 cursor-pointer block"
+                          >
+                            Eliminar imagen
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {/* Opciones Web */}
+                    <div className="pt-2 border-t border-amber-200/80 space-y-2">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={familiaForm.mostrarPrecioWeb}
+                          onChange={e => setFamiliaForm({ ...familiaForm, mostrarPrecioWeb: e.target.checked })}
+                          className="w-4 h-4 accent-emerald-500 rounded"
+                        />
+                        <span className="text-xs font-bold text-slate-800">
+                          Mostrar precios de las presentaciones en la web
+                        </span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={familiaForm.destacado}
+                          onChange={e => setFamiliaForm({ ...familiaForm, destacado: e.target.checked })}
+                          className="w-4 h-4 accent-amber-500 rounded"
+                        />
+                        <span className="text-xs font-semibold text-slate-700">
+                          Destacar en la página de inicio
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Columna Derecha: Selector y Gestor de Presentaciones (7 cols) */}
+                <div className="md:col-span-7 flex flex-col space-y-4">
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex-1 flex flex-col">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <span className="block text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">
+                          Presentaciones del Producto ({familiaPresentaciones.length})
+                        </span>
+                        <span className="text-xs text-slate-500">
+                          Selecciona los productos del POS que son variantes de esta familia y define su etiqueta visible en la web.
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Buscador de productos del inventario para añadir */}
+                    <div className="relative mb-3">
+                      <Search className="absolute left-3 top-2.5 text-slate-400 w-4 h-4" />
+                      <input
+                        type="text"
+                        placeholder="Buscar producto existente para añadir (ej: 500ml, 1.5L, 3L, 1kg)..."
+                        value={busquedaPresentacion}
+                        onChange={e => setBusquedaPresentacion(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-900 focus:border-amber-500 outline-none"
+                      />
+                    </div>
+
+                    {/* Resultados de sugerencias para añadir */}
+                    {busquedaPresentacion.trim() && (
+                      <div className="mb-3 max-h-36 overflow-y-auto bg-white rounded-lg border border-slate-200 divide-y divide-slate-100 shadow-xs">
+                        {productos
+                          .filter(p => 
+                            !p.esPrincipalWeb &&
+                            p.id !== familiaForm.id &&
+                            !familiaPresentaciones.some(fp => fp.id === p.id) &&
+                            (p.nombre.toLowerCase().includes(busquedaPresentacion.toLowerCase()) || (p.codigoBarras && p.codigoBarras.includes(busquedaPresentacion)))
+                          )
+                          .slice(0, 5)
+                          .map(p => (
+                            <div key={p.id} className="p-2.5 flex items-center justify-between hover:bg-slate-50 text-xs">
+                              <div>
+                                <div className="font-bold text-slate-800">{p.nombre}</div>
+                                <div className="text-[11px] text-slate-500">S/ {p.precio.toFixed(2)} • Stk: {p.stock} {p.unidadMedida}</div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => agregarPresentacionAFamilia(p)}
+                                className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-md text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
+                              >
+                                <Plus className="w-3 h-3" /> Añadir
+                              </button>
+                            </div>
+                          ))}
+                        {productos.filter(p => !p.esPrincipalWeb && !familiaPresentaciones.some(fp => fp.id === p.id) && p.nombre.toLowerCase().includes(busquedaPresentacion.toLowerCase())).length === 0 && (
+                          <div className="p-3 text-center text-xs text-slate-400 italic">No se encontraron productos disponibles</div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Lista de Presentaciones Asignadas */}
+                    <div className="flex-1 max-h-80 overflow-y-auto space-y-2.5 pr-1">
+                      {familiaPresentaciones.length > 0 ? (
+                        familiaPresentaciones.map((pres, idx) => (
+                          <div key={pres.id} className="p-3 bg-white rounded-xl border border-slate-200 hover:border-amber-300 transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-bold text-slate-900 truncate">
+                                {idx + 1}. {pres.nombre}
+                              </div>
+                              <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
+                                <span className="font-semibold text-emerald-600">S/ {pres.precio.toFixed(2)}</span>
+                                <span>•</span>
+                                <span>Stk: {pres.stock} {pres.unidadMedida}</span>
+                              </div>
+                            </div>
+
+                            {/* Input Etiqueta Web */}
+                            <div className="flex items-center gap-2 w-full sm:w-auto">
+                              <div className="flex-1 sm:w-44">
+                                <label className="block text-[9px] font-extrabold text-slate-500 uppercase tracking-wider mb-0.5">
+                                  Etiqueta en Web
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="Ej: 500ml, 1.5L, 3L"
+                                  value={pres.etiquetaVariante}
+                                  onChange={e => actualizarEtiquetaPresentacion(pres.id, e.target.value)}
+                                  className="w-full bg-slate-50 border border-slate-300 focus:bg-white rounded-md px-2 py-1 text-xs text-slate-900 font-semibold focus:border-amber-500 outline-none"
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => removerPresentacionDeFamilia(pres.id)}
+                                className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer mt-3"
+                                title="Quitar de la familia"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="p-8 text-center bg-white rounded-xl border border-dashed border-slate-300 flex flex-col items-center justify-center text-slate-400">
+                          <Layers className="w-8 h-8 opacity-40 mb-2 text-amber-500" />
+                          <p className="text-xs font-semibold text-slate-600">Aún no has añadido presentaciones</p>
+                          <p className="text-[11px] text-slate-400 mt-0.5">Usa el buscador arriba para agregar las variantes (ej. 500ml, 1L, 3L) que pertenecen a esta familia.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between flex-shrink-0">
+                <span className="text-xs text-slate-500 font-medium">
+                  {familiaPresentaciones.length} presentación{familiaPresentaciones.length !== 1 ? 'es' : ''} asignada{familiaPresentaciones.length !== 1 ? 's' : ''}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setModalFamiliaOpen(false)}
+                    className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 font-semibold text-xs rounded-xl border border-slate-300 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={guardandoFamilia || !familiaForm.nombre.trim()}
+                    className="px-5 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {guardandoFamilia ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                        <span>Guardando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>Guardar Familia Web</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

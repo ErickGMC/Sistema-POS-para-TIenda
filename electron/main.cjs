@@ -386,6 +386,30 @@ ipcMain.handle('db:obtenerTodosProductos', () => {
   }
 });
 
+ipcMain.handle('db:obtenerProductosParaVenta', () => {
+  try {
+    return db.obtenerProductosParaVenta();
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle('db:obtenerPresentacionesDeFamilia', (event, familiaId) => {
+  try {
+    return db.obtenerPresentacionesDeFamilia(familiaId);
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle('db:guardarFamiliaConPresentaciones', (event, { familia, presentaciones }) => {
+  try {
+    return db.guardarFamiliaConPresentaciones(familia, presentaciones);
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('db:crearProducto', (event, producto) => {
   try {
     const parsed = ProductoSchema.parse(producto);

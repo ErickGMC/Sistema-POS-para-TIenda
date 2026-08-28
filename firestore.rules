@@ -58,6 +58,15 @@ service cloud.firestore {
       allow read, write: if isAuthenticated();
     }
 
+    // CONTROL DE CAJA Y TURNOS:
+    // - Solo empleados logueados
+    match /caja_turnos/{document=**} {
+      allow read, write: if isAuthenticated();
+    }
+    match /caja_movimientos/{document=**} {
+      allow read, write: if isAuthenticated();
+    }
+
     // AUDITORÍA:
     // - Solo empleados logueados
     match /audit_logs/{document=**} {

@@ -1,6 +1,20 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    
+    // Imágenes de productos: Lectura pública para la Tienda Web y POS, escritura solo para usuarios autenticados
+    match /productos/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Banners publicitarios: Lectura pública para la Tienda Web, escritura solo para usuarios autenticados
+    match /banners/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // Por defecto: Todo lo demás requiere autenticación
     match /{allPaths=**} {
       allow read, write: if request.auth != null;
     }

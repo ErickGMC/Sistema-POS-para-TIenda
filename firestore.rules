@@ -7,70 +7,108 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function getUserData() {
+      return get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data;
+    }
+
+    function isUserActive() {
+      return isAuthenticated() && (
+        !exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) ||
+        getUserData().get('activo', true) == true
+      );
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.get('role', '') == 'admin' ||
+        (exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) &&
+         getUserData().get('role', '') == 'admin')
+      );
+    }
+
+    function hasPermission(perm) {
+      return isAdmin() || (
+        isUserActive() && (
+          request.auth.token.get('permisos', []).hasAny([perm, 'all']) ||
+          (exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) &&
+           getUserData().get('permisos', []).hasAny([perm, 'all']))
+        )
+      );
+    }
+
     // PRODUCTOS:
     // - Lectura pública para la tienda web y catálogo
-    // - Escritura solo para empleados logueados
+    // - Escritura solo para usuarios autorizados
     match /productos/{document=**} {
       allow read: if true;
-      allow write: if isAuthenticated();
+      allow write: if isUserActive() && (isAdmin() || hasPermission('inventario:modificar'));
     }
 
     // VENTAS Y DETALLES:
-    // - Información de ventas, detalles y correlativo. Solo empleados logueados.
+    // - Información de ventas, detalles y correlativo. Solo empleados logueados y activos.
     match /ventas/{document=**} {
-      allow read, write: if isAuthenticated();
+      allow read: if isUserActive();
+      allow write: if isUserActive() && (isAdmin() || hasPermission('ventas:cobrar') || hasPermission('ventas:historial'));
     }
     match /ventas_detalle/{document=**} {
-      allow read, write: if isAuthenticated();
+      allow read: if isUserActive();
+      allow write: if isUserActive() && (isAdmin() || hasPermission('ventas:cobrar'));
     }
     match /ventas_correlativo/{document=**} {
-      allow read, write: if isAuthenticated();
+      allow read: if isUserActive();
+      allow write: if isUserActive() && (isAdmin() || hasPermission('ventas:cobrar'));
     }
     match /correlativos/{document=**} {
-      allow read, write: if isAuthenticated();
+      allow read: if isUserActive();
+      allow write: if isUserActive() && (isAdmin() || hasPermission('ventas:cobrar'));
     }
 
     // USUARIOS (Roles):
-    // - Solo empleados autenticados pueden leer/escribir.
-    match /usuarios/{document=**} {
-      allow read, write: if isAuthenticated();
+    // - Lectura: solo personal autenticado y activo.
+    // - Creación/Eliminación: Solo administradores.
+    // - Actualización: Admin o el propio usuario actualizando campos no protegidos.
+    match /usuarios/{userId} {
+      allow read: if isUserActive();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        isAuthenticated() && request.auth.uid == userId &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'permisos', 'activo'])
+      );
     }
 
     // WEB CONFIG:
-    // - Lectura pública para la tienda web (necesita config de WhatsApp, nombre, etc.)
-    // - Escritura solo para empleados logueados
+    // - Lectura pública para la tienda web
+    // - Escritura solo para admin o permiso web:configurar
     match /web_config/{document=**} {
       allow read: if true;
-      allow write: if isAuthenticated();
+      allow write: if isUserActive() && (isAdmin() || hasPermission('web:configurar'));
     }
 
     // BANNERS:
     // - Lectura pública para la tienda web
-    // - Escritura solo para empleados logueados
+    // - Escritura solo para admin o permiso web:configurar
     match /banners/{document=**} {
       allow read: if true;
-      allow write: if isAuthenticated();
+      allow write: if isUserActive() && (isAdmin() || hasPermission('web:configurar'));
     }
 
     // LISTAS DE COMPRA (Reabastecimiento):
-    // - Solo empleados logueados
     match /compras_listas/{document=**} {
-      allow read, write: if isAuthenticated();
+      allow read: if isUserActive();
+      allow write: if isUserActive() && (isAdmin() || hasPermission('inventario:modificar'));
     }
 
     // CONTROL DE CAJA Y TURNOS:
-    // - Solo empleados logueados
     match /caja_turnos/{document=**} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if isUserActive();
     }
     match /caja_movimientos/{document=**} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if isUserActive();
     }
 
     // AUDITORÍA:
-    // - Solo empleados logueados
     match /audit_logs/{document=**} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if isUserActive();
     }
   }
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import CajaRegistradora from './components/pos/CajaRegistradora';
 import Inventario from './components/inventory/Inventario';
 import GestionUsuarios from './components/users/GestionUsuarios';
@@ -19,6 +19,7 @@ function App() {
   const [online, setOnline] = useState(navigator.onLine);
   const [pendingCount, setPendingCount] = useState(0);
   const [toastMessage, setToastMessage] = useState<{msg: string, type: 'success'|'error'} | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isFirebaseConfigured, setIsFirebaseConfigured] = useState<boolean | null>(null);
@@ -105,8 +106,14 @@ function App() {
   };
 
   const showToast = (msg: string, type: 'success'|'error' = 'success') => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
     setToastMessage({ msg, type });
-    setTimeout(() => setToastMessage(null), 4000);
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastMessage(null);
+      toastTimeoutRef.current = null;
+    }, 4000);
   };
 
   // Escuchar estado de conexión e interrogar la cola SQLite

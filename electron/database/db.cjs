@@ -679,7 +679,7 @@ function guardarVenta(ventaParams, detalleVenta) {
 function anularVenta(ventaId) {
     const selectVenta = db.prepare('SELECT * FROM ventas WHERE id = ?');
     const updateVentaAnulada = db.prepare('UPDATE ventas SET anulado = 1 WHERE id = ?');
-    const selectDetalles = db.prepare('SELECT producto_id, cantidad FROM ventas_detalle WHERE venta_id = ?');
+    const selectDetalles = db.prepare('SELECT id, producto_id, cantidad, precio_unitario, subtotal FROM ventas_detalle WHERE venta_id = ?');
     const updateStock = db.prepare('UPDATE productos SET stock = stock + @cantidad WHERE id = @producto_id');
     const insertSync = db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (@entidad, @entidad_id, @operacion, @datos_json)');
     const selectProducto = db.prepare('SELECT * FROM productos WHERE id = ?');
@@ -1028,20 +1028,43 @@ function limpiarUsuariosLocales() {
     }
 }
 
+function purgarColaSync() {
+    try {
+        // Eliminar registros completados (estado_sync = 1) con más de 7 días de antigüedad
+        const info = db.prepare("DELETE FROM sync_queue WHERE estado_sync = 1 AND fecha_creacion < datetime('now', '-7 days')").run();
+        return { success: true, deleted: info.changes };
+    } catch (err) {
+        console.error('Error purgando sync_queue:', err);
+        return { success: false, error: err.message };
+    }
+}
+
 function obtenerDashboardDataLocal(tsInicioObj, strInicio) {
     try {
         // 1. Obtener Ventas
         const ventas = db.prepare('SELECT * FROM ventas WHERE fecha >= ? ORDER BY fecha DESC').all(strInicio);
-        const stmtDetalles = db.prepare(`
-            SELECT d.*, p.nombre as producto_nombre 
-            FROM ventas_detalle d 
-            LEFT JOIN productos p ON d.producto_id = p.id 
-            WHERE d.venta_id = ?
-        `);
-        for (const v of ventas) {
-            v.detalles = stmtDetalles.all(v.id);
-            // Transform date for compat with UI
-            v.fecha = { seconds: Math.floor(new Date(v.fecha).getTime() / 1000) };
+        
+        if (ventas.length > 0) {
+            const ventaIds = ventas.map(v => v.id);
+            const placeholders = ventaIds.map(() => '?').join(',');
+            const todosDetalles = db.prepare(`
+                SELECT d.*, p.nombre as producto_nombre 
+                FROM ventas_detalle d 
+                LEFT JOIN productos p ON d.producto_id = p.id 
+                WHERE d.venta_id IN (${placeholders})
+            `).all(...ventaIds);
+
+            const detallesPorVenta = {};
+            for (const det of todosDetalles) {
+                if (!detallesPorVenta[det.venta_id]) detallesPorVenta[det.venta_id] = [];
+                detallesPorVenta[det.venta_id].push(det);
+            }
+
+            for (const v of ventas) {
+                v.detalles = detallesPorVenta[v.id] || [];
+                // Transform date for compat with UI
+                v.fecha = { seconds: Math.floor(new Date(v.fecha).getTime() / 1000) };
+            }
         }
 
         // 2. Obtener Stock Bajo
@@ -1053,8 +1076,6 @@ function obtenerDashboardDataLocal(tsInicioObj, strInicio) {
         return { success: false, error: err.message };
     }
 }
-
-
 
 module.exports = {
     db,
@@ -1087,6 +1108,7 @@ module.exports = {
     obtenerListasCompras,
     eliminarListaCompra,
     limpiarUsuariosLocales,
-    obtenerDashboardDataLocal
+    obtenerDashboardDataLocal,
+    purgarColaSync
 };
 

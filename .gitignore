@@ -24,9 +24,10 @@ dist-ssr
 *.sw?
 release/
 scratch/
-firebase_config.json
-scratch/service-account.json
-*.json
 pos.db
 pos.db-shm
 pos.db-wal
+electron/database/*.db*
+**/firebase_config.json
+**/service-account*.json
+*.local

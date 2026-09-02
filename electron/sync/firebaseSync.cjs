@@ -1,4 +1,4 @@
-const { db, limpiarUsuariosLocales } = require('../database/db.cjs');
+const { db, limpiarUsuariosLocales, purgarColaSync } = require('../database/db.cjs');
 const { initializeApp, deleteApp, getApps } = require('firebase/app');
 const { getFirestore, doc, getDoc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField, vector } = require('firebase/firestore');
 const { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } = require('firebase/auth');
@@ -15,12 +15,11 @@ let storage = null;
 let secondaryApp = null;
 let secondaryAuth = null;
 
-// Helper para obtener la API Key de Gemini desde entorno, configuración local o fallback
+// Helper para obtener la API Key de Gemini desde entorno o configuración local
 function getGeminiApiKey() {
     if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
     if (firebaseConfig && firebaseConfig.geminiApiKey) return firebaseConfig.geminiApiKey;
-    const fallbackParts = ['AQ.', 'Ab8RN6KY9zJuP7BjO-ppcsm4pwjHytFAeRfikDS_ln2zKAiarg'];
-    return fallbackParts.join('');
+    return null;
 }
 
 // ── URL de la Tienda Web (para el webhook de embeddings) ───────────────────────
@@ -175,7 +174,46 @@ function parsearEtiquetasSync(raw) {
 }
 
 /**
- * Construye el texto RAG idéntico al usado en Tienda-web y script de migración
+ * Infiere conceptos clave y necesidades a partir del nombre, categoría y descripción
+ */
+function inferirConceptosSemanticosSync(nombre, categoria, desc) {
+    const texto = `${nombre || ''} ${categoria || ''} ${desc || ''}`.toLowerCase();
+    const conceptos = [];
+
+    // Proteína
+    if (texto.includes('pollo') || texto.includes('carne') || texto.includes('huevo') || texto.includes('queso') || texto.includes('pescado') || texto.includes('atun') || texto.includes('patasca') || texto.includes('carnero')) {
+        conceptos.push('proteina', 'alimento proteico', 'desarrollo muscular', 'fuerza');
+    }
+    // Hidratación
+    if (texto.includes('agua') || texto.includes('sporade') || texto.includes('gatorade') || texto.includes('rehidratante') || texto.includes('cielo') || texto.includes('mineral') || texto.includes('isotonica') || texto.includes('electrolito')) {
+        conceptos.push('hidratacion', 'rehidratacion', 'calmar la sed', 'electrolitos', 'deporte');
+    }
+    // Desayuno
+    if (texto.includes('pan') || texto.includes('leche') || texto.includes('huevo') || texto.includes('queso') || texto.includes('avena') || texto.includes('yogurt') || texto.includes('platano')) {
+        conceptos.push('desayuno', 'primera comida del dia', 'manana');
+    }
+    // Almuerzo
+    if (texto.includes('arroz') || texto.includes('fideo') || texto.includes('tallarin') || texto.includes('pollo') || texto.includes('menu') || texto.includes('aderezo') || texto.includes('papa') || texto.includes('lenteja')) {
+        conceptos.push('almuerzo', 'segundo', 'comida criolla', 'guiso');
+    }
+    // Limpieza
+    if (texto.includes('lejia') || texto.includes('clorox') || texto.includes('desinfectante') || texto.includes('limpieza') || texto.includes('cloro') || texto.includes('aseo')) {
+        conceptos.push('limpieza', 'desinfeccion', 'aseo del hogar', 'higiene');
+    }
+    // Antojo / Dulce
+    if (texto.includes('chocolate') || texto.includes('sublime') || texto.includes('galleta') || texto.includes('casino') || texto.includes('morocha') || texto.includes('lentejas') || texto.includes('dulce')) {
+        conceptos.push('antojo dulce', 'snack', 'golosina', 'piqueo');
+    }
+    // Carbohidratos / Energía
+    if (texto.includes('arroz') || texto.includes('fideo') || texto.includes('papa') || texto.includes('pan') || texto.includes('harina') || texto.includes('avena')) {
+        conceptos.push('carbohidratos', 'energia');
+    }
+
+    return conceptos;
+}
+
+/**
+ * Construye el texto RAG idéntico y enriquecido ontológicamente
  */
 function construirTextoRAGSync(p) {
     const partes = [
@@ -188,6 +226,10 @@ function construirTextoRAGSync(p) {
     const etiquetas = parsearEtiquetasSync(p.etiquetas);
     if (etiquetas.length > 0) {
         partes.push(`Etiquetas: ${etiquetas.join(', ')}`);
+    }
+    const conceptos = inferirConceptosSemanticosSync(p.nombre, p.categoria || '', p.descripcion || '');
+    if (conceptos.length > 0) {
+        partes.push(`Necesidades y Conceptos: ${conceptos.join(', ')}`);
     }
     if (p.unidadMedida && p.unidadMedida !== 'unidad') {
         partes.push(`Unidad: ${p.unidadMedida}`);
@@ -611,10 +653,12 @@ function startSyncWorker() {
     
     // Ejecutar inmediatamente
     sincronizarCola().catch(err => console.error("Error en syncWorker inicial:", err));
+    purgarColaSync();
     
     // Programar ejecución cada 5 minutos (300000 ms)
     syncInterval = setInterval(() => {
         sincronizarCola().catch(err => console.error("Error en syncWorker periódico:", err));
+        purgarColaSync();
     }, 300000);
 }
 
@@ -956,7 +1000,8 @@ async function descargarDatosDesdeNube() {
                 } else {
                     const crypto = require('crypto');
                     salt = crypto.randomBytes(16).toString('hex');
-                    hash = crypto.scryptSync('123456', salt, 64).toString('hex');
+                    const tempSecret = crypto.randomBytes(32).toString('hex');
+                    hash = crypto.scryptSync(tempSecret, salt, 64).toString('hex');
                 }
                 
                 stmtUser.run(

@@ -356,6 +356,8 @@ async function generarEmbeddingProducto(producto) {
                     precio: producto.precio || null,
                     unidadMedida: producto.unidadMedida || null,
                     disponible: Boolean(producto.disponible),
+                    esPrincipalWeb: Boolean(producto.esPrincipalWeb),
+                    etiquetaVariante: producto.etiquetaVariante || null,
                 }),
             }),
             25000,
@@ -450,9 +452,43 @@ async function sincronizarCola() {
                 
                 if (reg.entidad === 'venta') {
                     const docRef = doc(firestore, 'ventas', reg.entidad_id);
-                    batch.set(docRef, data.venta);
+                    const v = data.venta || {};
+                    const idParts = (reg.entidad_id || '').split('-');
+                    const serie = idParts.length > 1 ? idParts[0] : 'B001';
+                    const correlativoNumero = idParts.length > 1 ? parseInt(idParts[1], 10) || 1 : 1;
+                    
+                    const salePayload = {
+                        ...v,
+                        id: reg.entidad_id,
+                        serie,
+                        correlativoNumero,
+                        numeroTicket: reg.entidad_id,
+                        fechaString: v.fecha || new Date().toISOString(),
+                        fecha: Timestamp.now(),
+                        anulado: Boolean(v.anulado),
+                        origen: 'TIENDA_POS_DESKTOP'
+                    };
+                    batch.set(docRef, salePayload, { merge: true });
+
+                    // Formato 1: Documento 'items' con array (compatible con POS Desktop legado)
                     const detalleRef = doc(firestore, `ventas/${reg.entidad_id}/detalle`, 'items');
-                    batch.set(detalleRef, { items: data.detalle });
+                    batch.set(detalleRef, { items: data.detalle || [] });
+
+                    // Formato 2: Documentos individuales (compatible con AE_POS Android)
+                    if (Array.isArray(data.detalle)) {
+                        for (const itm of data.detalle) {
+                            const itemId = itm.id || crypto.randomUUID();
+                            const itemDocRef = doc(firestore, `ventas/${reg.entidad_id}/detalle`, itemId);
+                            batch.set(itemDocRef, {
+                                id: itemId,
+                                venta_id: reg.entidad_id,
+                                producto_id: itm.producto_id || itm.productoId || '',
+                                cantidad: Number(itm.cantidad) || 1,
+                                precio_unitario: Number(itm.precio_unitario || itm.precioUnitario || 0),
+                                subtotal: Number(itm.subtotal) || 0
+                            });
+                        }
+                    }
                 } else if (reg.entidad === 'producto') {
                     const docRef = doc(firestore, 'productos', reg.entidad_id);
                     if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
@@ -560,6 +596,12 @@ async function sincronizarCola() {
                     } else if (reg.operacion === 'DELETE') {
                         batch.delete(docRef);
                     }
+                } else if (reg.entidad === 'caja_turno') {
+                    const docRef = doc(firestore, 'caja_turnos', reg.entidad_id);
+                    batch.set(docRef, { ...data, actualizado_el: Timestamp.now() }, { merge: true });
+                } else if (reg.entidad === 'caja_movimiento') {
+                    const docRef = doc(firestore, 'caja_movimientos', reg.entidad_id);
+                    batch.set(docRef, { ...data, actualizado_el: Timestamp.now() }, { merge: true });
                 }
 
                 registrosProcesados.push(reg.id);
@@ -759,24 +801,45 @@ async function crearUsuarioAuth(emailOrUsername, password) {
 // DASHBOARD (NUBE)
 // ====================================================================
 async function obtenerDashboardData(tsInicioObj, strInicio) {
-    if (!firestore) return { success: false, error: 'Firebase no configurado' };
+    // Si firestore está disponible, intentar consultar la nube
+    if (firestore) {
+        try {
+            const { where } = require('firebase/firestore');
+
+            // 1. Cargar Ventas
+            const qVentas = query(collection(firestore, 'ventas'), where('fechaString', '>=', strInicio), orderBy('fechaString', 'desc'));
+            const snapVentas = await getDocs(qVentas).catch(async () => {
+                const qFallback = query(collection(firestore, 'ventas'), where('fecha', '>=', strInicio), orderBy('fecha', 'desc'));
+                return await getDocs(qFallback);
+            });
+            const ventasList = snapVentas.docs.map(d => ({ id: d.id, ...d.data() }));
+
+            // 2. Cargar Stock Bajo
+            const qStock = query(collection(firestore, 'productos'), where('stock', '<=', 10), orderBy('stock', 'asc'), limit(10));
+            const snapStock = await getDocs(qStock);
+            const stockList = snapStock.docs.map(d => ({ id: d.id, ...d.data() }));
+
+            return { success: true, ventas: ventasList, stock: stockList };
+        } catch (err) {
+            console.warn("Fallo al obtener dashboard desde Firestore, usando SQLite local como fallback:", err.message);
+        }
+    }
+
+    // Fallback a SQLite local si no hay conexión o falló la consulta a la nube
     try {
-        const { where } = require('firebase/firestore');
-
-        // 1. Cargar Ventas
-        const qVentas = query(collection(firestore, 'ventas'), where('fecha', '>=', strInicio), orderBy('fecha', 'desc'));
-        const snapVentas = await getDocs(qVentas);
-        const ventasList = snapVentas.docs.map(d => ({ id: d.id, ...d.data() }));
-
-        // 2. Cargar Stock Bajo
-        const qStock = query(collection(firestore, 'productos'), where('stock', '<=', 10), orderBy('stock', 'asc'), limit(10));
-        const snapStock = await getDocs(qStock);
-        const stockList = snapStock.docs.map(d => ({ id: d.id, ...d.data() }));
-
-        return { success: true, ventas: ventasList, stock: stockList };
-    } catch (err) {
-        console.error("Error obteniendo dashboard data:", err);
-        return { success: false, error: err.message };
+        const localVentas = db.prepare(`
+            SELECT * FROM ventas 
+            WHERE fecha >= ? AND (anulado = 0 OR anulado IS NULL) 
+            ORDER BY fecha DESC
+        `).all(strInicio);
+        const localStock = db.prepare(`
+            SELECT * FROM productos 
+            WHERE stock <= 10 AND (esPrincipalWeb = 0 OR esPrincipalWeb IS NULL) 
+            ORDER BY stock ASC LIMIT 10
+        `).all();
+        return { success: true, ventas: localVentas, stock: localStock, isOffline: true };
+    } catch (localErr) {
+        return { success: false, error: localErr.message };
     }
 }
 
@@ -949,8 +1012,18 @@ async function descargarDatosDesdeNube() {
             const detallesSnap = await getDocs(collection(firestore, `ventas/${ventaId}/detalle`));
             detallesSnap.forEach(detDoc => {
                 const detData = detDoc.data();
-                if (detData && Array.isArray(detData.items)) {
-                    detalles.push(...detData.items);
+                if (detData) {
+                    if (detDoc.id === 'items' && Array.isArray(detData.items)) {
+                        detalles.push(...detData.items);
+                    } else if (detData.producto_id || detData.productoId) {
+                        detalles.push({
+                            id: detDoc.id || detData.id,
+                            producto_id: detData.producto_id || detData.productoId,
+                            cantidad: Number(detData.cantidad) || 1,
+                            precio_unitario: Number(detData.precio_unitario || detData.precioUnitario || 0),
+                            subtotal: Number(detData.subtotal) || 0
+                        });
+                    }
                 }
             });
             
@@ -971,6 +1044,19 @@ async function descargarDatosDesdeNube() {
         const comprasListas = [];
         comprasListasSnap.forEach(d => comprasListas.push({ id: d.id, data: d.data() }));
 
+        // 6b. Descargar Turnos y Movimientos de Caja
+        let turnos = [];
+        try {
+            const turnosSnap = await getDocs(collection(firestore, 'caja_turnos'));
+            turnosSnap.forEach(d => turnos.push({ id: d.id, ...d.data() }));
+        } catch (_) {}
+
+        let movs = [];
+        try {
+            const movsSnap = await getDocs(collection(firestore, 'caja_movimientos'));
+            movsSnap.forEach(d => movs.push({ id: d.id, ...d.data() }));
+        } catch (_) {}
+
         console.log("Descarga de red completada con éxito. Escribiendo de forma atómica en SQLite...");
 
         // 7. Guardar en SQLite en UNA SOLA TRANSACCIÓN ATÓMICA
@@ -978,12 +1064,14 @@ async function descargarDatosDesdeNube() {
         const stmtCheckUser = db.prepare('SELECT password_hash, salt FROM usuarios WHERE id = ? OR username = ? OR (email IS NOT NULL AND LOWER(email) = LOWER(?))');
         const stmtUser = db.prepare('INSERT OR REPLACE INTO usuarios (id, username, email, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
         const stmtBanner = db.prepare('INSERT OR REPLACE INTO banners (id, title, subtitle, imageUrl, imagenLocal, badgeText, ctaText, ctaActionCategory, active, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-        const insertVenta = db.prepare('INSERT OR REPLACE INTO ventas (id, fecha, total, metodoPago, estado, clienteNombre, clienteDocumento) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        const insertVenta = db.prepare('INSERT OR REPLACE INTO ventas (id, fecha, total, metodoPago, estado, clienteNombre, clienteDocumento, anulado) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
         const insertDetalle = db.prepare('INSERT OR REPLACE INTO ventas_detalle (id, venta_id, producto_id, cantidad, precio_unitario, subtotal) VALUES (?, ?, ?, ?, ?, ?)');
         
         const stmtWebConfig = db.prepare('INSERT OR REPLACE INTO web_config (key, value) VALUES (?, ?)');
         const stmtLista = db.prepare('INSERT OR REPLACE INTO compras_listas (id, nombre, fecha, total_estimado, estado) VALUES (?, ?, ?, ?, ?)');
         const stmtDetalleLista = db.prepare('INSERT OR REPLACE INTO compras_listas_detalle (id, lista_id, producto_id, cantidad_pedir, costo_unitario) VALUES (?, ?, ?, ?, ?)');
+        const stmtTurno = db.prepare('INSERT OR REPLACE INTO cajas_turnos (id, fechaApertura, fechaCierre, montoInicial, totalVentasEfectivo, totalVentasDigital, totalIngresos, totalEgresos, montoEsperado, montoFinalReal, diferencia, estado, cajero, observaciones) VALUES (@id, @fechaApertura, @fechaCierre, @montoInicial, @totalVentasEfectivo, @totalVentasDigital, @totalIngresos, @totalEgresos, @montoEsperado, @montoFinalReal, @diferencia, @estado, @cajero, @observaciones)');
+        const stmtMov = db.prepare('INSERT OR REPLACE INTO cajas_movimientos (id, turnoId, tipo, monto, motivo, fecha) VALUES (@id, @turnoId, @tipo, @monto, @motivo, @fecha)');
 
         const tx = db.transaction(() => {
             // A. Registrar Usuarios preservando contraseñas locales si ya existen
@@ -1082,7 +1170,8 @@ async function descargarDatosDesdeNube() {
                     v.metodoPago || 'Efectivo',
                     v.estado || 'completada',
                     v.clienteNombre || null,
-                    v.clienteDocumento || null
+                    v.clienteDocumento || null,
+                    (v.anulado === true || v.anulado === 1) ? 1 : 0
                 );
 
                 if (Array.isArray(itemVenta.detalles)) {
@@ -1137,6 +1226,37 @@ async function descargarDatosDesdeNube() {
                         );
                     }
                 }
+            }
+
+            // G. Registrar Turnos y Movimientos de Caja
+            for (const t of turnos) {
+                stmtTurno.run({
+                    id: t.id,
+                    fechaApertura: t.fechaApertura || new Date().toISOString(),
+                    fechaCierre: t.fechaCierre || null,
+                    montoInicial: Number(t.montoInicial) || 0,
+                    totalVentasEfectivo: Number(t.totalVentasEfectivo) || 0,
+                    totalVentasDigital: Number(t.totalVentasDigital) || 0,
+                    totalIngresos: Number(t.totalIngresos) || 0,
+                    totalEgresos: Number(t.totalEgresos) || 0,
+                    montoEsperado: Number(t.montoEsperado) || 0,
+                    montoFinalReal: (t.montoFinalReal !== undefined && t.montoFinalReal !== null) ? Number(t.montoFinalReal) : null,
+                    diferencia: (t.diferencia !== undefined && t.diferencia !== null) ? Number(t.diferencia) : null,
+                    estado: t.estado || 'abierta',
+                    cajero: t.cajero || 'Cajero Principal',
+                    observaciones: t.observaciones || null
+                });
+            }
+
+            for (const m of movs) {
+                stmtMov.run({
+                    id: m.id,
+                    turnoId: m.turnoId,
+                    tipo: m.tipo || 'ingreso',
+                    monto: Number(m.monto) || 0,
+                    motivo: m.motivo || 'Movimiento',
+                    fecha: m.fecha || new Date().toISOString()
+                });
             }
         });
         

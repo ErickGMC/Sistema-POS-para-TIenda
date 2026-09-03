@@ -30,11 +30,15 @@ export function generarHtmlTicket(
   const telefono = empresa.telefono || general.whatsapp || "";
   const leyenda = empresa.leyenda || "Representación impresa de la Boleta de Venta Electrónica. ¡Gracias por su compra!";
 
-  const correlativo = `B001-${(venta.id || "").toString().toUpperCase().slice(0, 8)}`;
+  // Si ya viene con formato de serie/ticket (ej. B001-00000001 o M001-00000001), respetarlo
+  const rawId = (venta.id || "").toString().trim().toUpperCase();
+  const correlativo = rawId.includes('-') 
+    ? rawId 
+    : `B001-${rawId.padStart(8, '0').slice(-8)}`;
   
   const fechaStr = venta.fecha_creacion 
-    ? new Date(venta.fecha_creacion).toLocaleString("es-PE")
-    : new Date().toLocaleString("es-PE");
+    ? new Date(venta.fecha_creacion).toLocaleString("es-PE", { timeZone: "America/Lima" })
+    : new Date().toLocaleString("es-PE", { timeZone: "America/Lima" });
 
   const metodoPago = (venta.metodoPago || "efectivo").toUpperCase();
 
@@ -62,34 +66,29 @@ export function generarHtmlTicket(
       <head>
         <title>Ticket ${correlativo}</title>
         <meta charset="utf-8" />
-        <meta name="viewport" content="width=4in, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <style>
           @page {
-            size: 4in 6in !important;
-            margin: 0 !important;
+            size: 80mm auto;
+            margin: 0;
           }
           @media print {
             html, body {
-              width: 4in !important;
-              height: 6in !important;
-              margin: 0 !important;
-              padding: 10px !important;
+              width: 76mm !important;
+              margin: 0 auto !important;
+              padding: 4px !important;
             }
           }
           html, body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            width: 4in;
-            height: 6in;
+            width: 76mm;
             margin: 0 auto;
-            padding: 12px;
+            padding: 8px;
             color: #000;
             background-color: #fff;
             font-size: 11px;
             line-height: 1.35;
             box-sizing: border-box;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
           }
           .text-center {
             text-align: center;
@@ -223,6 +222,153 @@ export async function imprimirTicket(
     }
   } catch (err) {
     console.error("Error de IPC al imprimir:", err);
+    await useUIStore.getState().showAlert("No se pudo conectar con el sistema de impresión.", "Error de Conexión");
+  }
+}
+
+export function generarHtmlCierreCaja(
+  turno: any,
+  empresa: EmpresaConfig,
+  general: any
+): string {
+  const nombreComercial = empresa.nombreComercial || general.nombreTienda || "MINIMARKET FLOR";
+  const ruc = empresa.ruc || "10000000000";
+  const direccion = empresa.direccionFiscal || general.ubicacion || "Dirección no especificada";
+
+  const apertura = turno.fechaApertura
+    ? new Date(turno.fechaApertura).toLocaleString("es-PE", { timeZone: "America/Lima" })
+    : "-";
+  const cierre = turno.fechaCierre
+    ? new Date(turno.fechaCierre).toLocaleString("es-PE", { timeZone: "America/Lima" })
+    : new Date().toLocaleString("es-PE", { timeZone: "America/Lima" });
+
+  const dif = Number(turno.diferencia || 0);
+  const estadoDif = dif === 0 ? "CUADRADA (S/ 0.00)" : dif > 0 ? `SOBRANTE (+S/ ${dif.toFixed(2)})` : `FALTANTE (-S/ ${Math.abs(dif).toFixed(2)})`;
+  const colorDif = dif === 0 ? "#059669" : dif > 0 ? "#2563eb" : "#dc2626";
+
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Corte Z - Turno ${turno.id ? turno.id.slice(0, 8) : ''}</title>
+        <meta charset="utf-8" />
+        <style>
+          @page { size: 80mm auto; margin: 0; }
+          @media print {
+            html, body { width: 76mm !important; margin: 0 auto !important; padding: 4px !important; }
+          }
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            width: 76mm; margin: 0 auto; padding: 8px; color: #000; font-size: 11px; line-height: 1.35;
+          }
+          .text-center { text-align: center; }
+          .text-right { text-align: right; }
+          .font-bold { font-weight: bold; }
+          .border-b { border-bottom: 1px dashed #64748b; }
+          .my-2 { margin: 6px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="text-center font-bold" style="font-size: 13px;">${nombreComercial}</div>
+        <div class="text-center" style="font-size: 10px;">RUC: ${ruc}</div>
+        <div class="text-center" style="font-size: 9px; color: #475569;">${direccion}</div>
+        
+        <div class="border-b my-2"></div>
+        <div class="text-center font-bold" style="font-size: 12px; letter-spacing: 0.5px;">
+          *** CIERRE DE CAJA (CORTE Z) ***
+        </div>
+        <div class="text-center" style="font-size: 10px; color: #64748b;">ID Turno: ${turno.id || '-'}</div>
+        <div class="border-b my-2"></div>
+
+        <div style="font-size: 10px;">
+          <div><strong>Cajero:</strong> ${turno.cajero || 'Cajero Principal'}</div>
+          <div><strong>Apertura:</strong> ${apertura}</div>
+          <div><strong>Cierre:</strong> ${cierre}</div>
+        </div>
+
+        <div class="border-b my-2"></div>
+        <div class="font-bold" style="margin-bottom: 4px;">RESUMEN DE EFECTIVO</div>
+        <table style="width: 100%; font-size: 11px;">
+          <tr>
+            <td>Fondo Inicial:</td>
+            <td class="text-right">S/ ${Number(turno.montoInicial || 0).toFixed(2)}</td>
+          </tr>
+          <tr>
+            <td>Ventas Efectivo (+):</td>
+            <td class="text-right">S/ ${Number(turno.totalVentasEfectivo || 0).toFixed(2)}</td>
+          </tr>
+          <tr>
+            <td>Ingresos Efectivo (+):</td>
+            <td class="text-right">S/ ${Number(turno.totalIngresos || 0).toFixed(2)}</td>
+          </tr>
+          <tr>
+            <td>Egresos / Gastos (-):</td>
+            <td class="text-right">S/ ${Number(turno.totalEgresos || 0).toFixed(2)}</td>
+          </tr>
+          <tr class="font-bold" style="background: #f1f5f9;">
+            <td style="padding: 4px 0;">EFECTIVO ESPERADO:</td>
+            <td class="text-right" style="padding: 4px 0;">S/ ${Number(turno.montoEsperado || 0).toFixed(2)}</td>
+          </tr>
+        </table>
+
+        <div class="border-b my-2"></div>
+        <div class="font-bold" style="margin-bottom: 4px;">ARQUEO FÍSICO CONTADO</div>
+        <table style="width: 100%; font-size: 11px;">
+          <tr class="font-bold">
+            <td>Monto Real en Caja:</td>
+            <td class="text-right">S/ ${Number(turno.montoFinalReal || 0).toFixed(2)}</td>
+          </tr>
+          <tr class="font-bold">
+            <td>Diferencia / Descuadre:</td>
+            <td class="text-right" style="color: ${colorDif};">${estadoDif}</td>
+          </tr>
+        </table>
+
+        <div class="border-b my-2"></div>
+        <div class="font-bold" style="margin-bottom: 4px;">VENTAS DIGITALES (SIN EFECTIVO)</div>
+        <table style="width: 100%; font-size: 11px;">
+          <tr>
+            <td>Digital (Yape/Plin/Tarjeta):</td>
+            <td class="text-right">S/ ${Number(turno.totalVentasDigital || 0).toFixed(2)}</td>
+          </tr>
+          <tr class="font-bold" style="background: #f8fafc;">
+            <td style="padding: 4px 0;">TOTAL VENTAS TURNO:</td>
+            <td class="text-right" style="padding: 4px 0;">S/ ${(Number(turno.totalVentasEfectivo || 0) + Number(turno.totalVentasDigital || 0)).toFixed(2)}</td>
+          </tr>
+        </table>
+
+        ${turno.observaciones ? `
+          <div class="border-b my-2"></div>
+          <div style="font-size: 10px;"><strong>Observaciones:</strong> ${turno.observaciones}</div>
+        ` : ''}
+
+        <div style="margin-top: 25px; text-align: center; font-size: 10px;">
+          <div style="border-top: 1px solid #000; width: 60%; margin: 0 auto 4px auto;"></div>
+          Firma Responsable
+        </div>
+
+        <div class="text-center" style="margin-top: 15px; font-size: 9px; color: #64748b;">
+          Minimarket Flor POS - Comprobante de Control Interno
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+export async function imprimirCierreCaja(
+  turno: any,
+  empresa: EmpresaConfig,
+  general: any
+) {
+  const html = generarHtmlCierreCaja(turno, empresa, general);
+  try {
+    const res = await (window as any).electron.imprimirSilencioso(html);
+    if (!res.success) {
+      console.error("Error al imprimir corte Z:", res.error);
+      await useUIStore.getState().showAlert("Error al imprimir el reporte de cierre.", "Error de Impresión");
+    }
+  } catch (err) {
+    console.error("Error de IPC al imprimir corte Z:", err);
     await useUIStore.getState().showAlert("No se pudo conectar con el sistema de impresión.", "Error de Conexión");
   }
 }

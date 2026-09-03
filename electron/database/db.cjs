@@ -2,10 +2,13 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { app } = require('electron');
+let app;
+try {
+    app = require('electron').app;
+} catch (_) {}
 
-// Obtener la ruta de la base de datos (segura en producción)
-const dbDir = app.isPackaged ? app.getPath('userData') : __dirname;
+// Obtener la ruta de la base de datos (segura en producción y pruebas)
+const dbDir = (app && typeof app.getPath === 'function' && app.isPackaged) ? app.getPath('userData') : __dirname;
 const dbPath = path.join(dbDir, 'pos.db');
 const schemaPath = path.join(__dirname, 'schema.sql');
 
@@ -76,6 +79,41 @@ const migrations = [
     () => {
         db.exec("UPDATE productos SET disponible = 0 WHERE (esPrincipalWeb = 0 OR esPrincipalWeb IS NULL)");
         db.exec("UPDATE productos SET disponible = 1 WHERE esPrincipalWeb = 1");
+    },
+    // Version 12 — Control de Cajas, Turnos, Arqueo y Movimientos de Efectivo + Restauración de disponible
+    () => {
+        db.exec("UPDATE productos SET disponible = 1 WHERE disponible = 0 AND (esPrincipalWeb = 0 OR esPrincipalWeb IS NULL)");
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS cajas_turnos (
+                id TEXT PRIMARY KEY,
+                fechaApertura TEXT NOT NULL,
+                fechaCierre TEXT,
+                montoInicial REAL NOT NULL,
+                totalVentasEfectivo REAL DEFAULT 0.0,
+                totalVentasDigital REAL DEFAULT 0.0,
+                totalIngresos REAL DEFAULT 0.0,
+                totalEgresos REAL DEFAULT 0.0,
+                montoEsperado REAL DEFAULT 0.0,
+                montoFinalReal REAL,
+                diferencia REAL,
+                estado TEXT DEFAULT 'abierta',
+                cajero TEXT DEFAULT 'Cajero Principal',
+                observaciones TEXT,
+                creado_el DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS cajas_movimientos (
+                id TEXT PRIMARY KEY,
+                turnoId TEXT NOT NULL,
+                tipo TEXT NOT NULL,
+                monto REAL NOT NULL,
+                motivo TEXT NOT NULL,
+                fecha TEXT NOT NULL,
+                FOREIGN KEY(turnoId) REFERENCES cajas_turnos(id) ON DELETE CASCADE
+            )
+        `);
+        db.exec("CREATE INDEX IF NOT EXISTS idx_cajas_movimientos_turno ON cajas_movimientos(turnoId)");
     }
 ];
 
@@ -102,11 +140,27 @@ if (currentVersion < migrations.length) {
 
 // --- Funciones CRUD de Productos ---
 
-const stmtBuscarProductoPorCodigo = db.prepare('SELECT * FROM productos WHERE codigoBarras = ? AND (esPrincipalWeb = 0 OR esPrincipalWeb IS NULL)');
+const stmtBuscarProductoPorCodigo = db.prepare(`
+    SELECT p.*,
+           COALESCE(p.imagenUrl, padre.imagenUrl) AS imagenUrl,
+           COALESCE(p.thumbnailUrl, padre.thumbnailUrl) AS thumbnailUrl,
+           COALESCE(p.imagenLocal, padre.imagenLocal) AS imagenLocal,
+           COALESCE(p.thumbnailLocal, padre.thumbnailLocal) AS thumbnailLocal
+    FROM productos p
+    LEFT JOIN productos padre ON p.productoPadreId = padre.id
+    WHERE p.codigoBarras = ? AND (p.esPrincipalWeb = 0 OR p.esPrincipalWeb IS NULL)
+`);
+
 const stmtBuscarProductosPorNombre = db.prepare(`
-    SELECT * FROM productos 
-    WHERE (nombre LIKE ? OR descripcion LIKE ? OR codigoBarras LIKE ?)
-      AND (esPrincipalWeb = 0 OR esPrincipalWeb IS NULL)
+    SELECT p.*,
+           COALESCE(p.imagenUrl, padre.imagenUrl) AS imagenUrl,
+           COALESCE(p.thumbnailUrl, padre.thumbnailUrl) AS thumbnailUrl,
+           COALESCE(p.imagenLocal, padre.imagenLocal) AS imagenLocal,
+           COALESCE(p.thumbnailLocal, padre.thumbnailLocal) AS thumbnailLocal
+    FROM productos p
+    LEFT JOIN productos padre ON p.productoPadreId = padre.id
+    WHERE (p.nombre LIKE ? OR p.descripcion LIKE ? OR p.codigoBarras LIKE ?)
+      AND (p.esPrincipalWeb = 0 OR p.esPrincipalWeb IS NULL)
     LIMIT 20
 `);
 
@@ -121,8 +175,13 @@ function buscarProductosPorNombre(nombre) {
 
 function obtenerProductosParaVenta() {
     return db.prepare(`
-        SELECT p.*
-        FROM productos p 
+        SELECT p.*,
+               COALESCE(p.imagenUrl, padre.imagenUrl) AS imagenUrl,
+               COALESCE(p.thumbnailUrl, padre.thumbnailUrl) AS thumbnailUrl,
+               COALESCE(p.imagenLocal, padre.imagenLocal) AS imagenLocal,
+               COALESCE(p.thumbnailLocal, padre.thumbnailLocal) AS thumbnailLocal
+        FROM productos p
+        LEFT JOIN productos padre ON p.productoPadreId = padre.id
         WHERE (p.esPrincipalWeb = 0 OR p.esPrincipalWeb IS NULL)
           AND (p.disponible = 1 OR p.disponible IS NULL)
         ORDER BY p.destacado DESC, p.nombre ASC
@@ -656,6 +715,19 @@ function guardarVenta(ventaParams, detalleVenta) {
             }
         }
         
+        // Actualizar turno de caja si existe uno abierto
+        try {
+            const activeShift = db.prepare("SELECT id FROM cajas_turnos WHERE estado = 'abierta' ORDER BY fechaApertura DESC LIMIT 1").get();
+            if (activeShift) {
+                const isEfectivo = (v.metodoPago || '').toLowerCase().includes('efectivo');
+                if (isEfectivo) {
+                    db.prepare("UPDATE cajas_turnos SET totalVentasEfectivo = totalVentasEfectivo + ? WHERE id = ?").run(v.total, activeShift.id);
+                } else {
+                    db.prepare("UPDATE cajas_turnos SET totalVentasDigital = totalVentasDigital + ? WHERE id = ?").run(v.total, activeShift.id);
+                }
+            }
+        } catch (_) {}
+
         // Agregar a la cola de sincronización para enviarla a Firebase luego
         insertSync.run({
             entidad: 'venta',
@@ -745,6 +817,19 @@ function anularVenta(ventaId) {
             datos_json: JSON.stringify({ venta, detalle: detalleParaSync })
         });
         
+        // Revertir del turno de caja si existe uno abierto
+        try {
+            const activeShift = db.prepare("SELECT id FROM cajas_turnos WHERE estado = 'abierta' ORDER BY fechaApertura DESC LIMIT 1").get();
+            if (activeShift) {
+                const isEfectivo = (venta.metodoPago || '').toLowerCase().includes('efectivo');
+                if (isEfectivo) {
+                    db.prepare("UPDATE cajas_turnos SET totalVentasEfectivo = MAX(0, totalVentasEfectivo - ?) WHERE id = ?").run(venta.total, activeShift.id);
+                } else {
+                    db.prepare("UPDATE cajas_turnos SET totalVentasDigital = MAX(0, totalVentasDigital - ?) WHERE id = ?").run(venta.total, activeShift.id);
+                }
+            }
+        } catch (_) {}
+
         return true;
     });
 
@@ -1077,6 +1162,162 @@ function obtenerDashboardDataLocal(tsInicioObj, strInicio) {
     }
 }
 
+// ====================================================================
+// CONTROL DE CAJA, TURNOS, ARQUEO Y MOVIMIENTOS DE EFECTIVO
+// ====================================================================
+
+function abrirTurno(montoInicial = 0, cajero = 'Cajero Principal') {
+    try {
+        const existente = db.prepare("SELECT id FROM cajas_turnos WHERE estado = 'abierta' LIMIT 1").get();
+        if (existente) {
+            return { success: false, error: 'Ya existe un turno de caja abierto.' };
+        }
+
+        const id = crypto.randomUUID();
+        const fechaApertura = new Date().toISOString();
+        const montoNum = Number(montoInicial) || 0;
+
+        const stmt = db.prepare(`
+            INSERT INTO cajas_turnos (id, fechaApertura, montoInicial, montoEsperado, estado, cajero)
+            VALUES (?, ?, ?, ?, 'abierta', ?)
+        `);
+        stmt.run(id, fechaApertura, montoNum, montoNum, cajero || 'Cajero Principal');
+
+        const turno = db.prepare("SELECT * FROM cajas_turnos WHERE id = ?").get(id);
+
+        // Encolar sincronización a Firestore
+        db.prepare(`
+            INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json)
+            VALUES ('caja_turno', ?, 'INSERT', ?)
+        `).run(id, JSON.stringify(turno));
+
+        return { success: true, turno };
+    } catch (err) {
+        console.error('Error al abrir turno de caja:', err);
+        return { success: false, error: err.message };
+    }
+}
+
+function obtenerTurnoActual() {
+    try {
+        const turno = db.prepare("SELECT * FROM cajas_turnos WHERE estado = 'abierta' ORDER BY fechaApertura DESC LIMIT 1").get();
+        if (!turno) {
+            return { success: true, turno: null };
+        }
+
+        const movimientos = db.prepare("SELECT * FROM cajas_movimientos WHERE turnoId = ? ORDER BY fecha DESC").all(turno.id);
+        const montoEsperado = Math.round((Number(turno.montoInicial) + Number(turno.totalVentasEfectivo) + Number(turno.totalIngresos) - Number(turno.totalEgresos)) * 100) / 100;
+
+        return {
+            success: true,
+            turno: {
+                ...turno,
+                montoEsperado,
+                movimientos
+            }
+        };
+    } catch (err) {
+        console.error('Error al obtener turno actual:', err);
+        return { success: false, error: err.message };
+    }
+}
+
+function registrarMovimientoCaja(turnoId, tipo, monto, motivo) {
+    try {
+        const turno = db.prepare("SELECT * FROM cajas_turnos WHERE id = ? AND estado = 'abierta'").get(turnoId);
+        if (!turno) {
+            return { success: false, error: 'Turno de caja no encontrado o ya cerrado.' };
+        }
+
+        const tipoNorm = tipo.toLowerCase() === 'ingreso' ? 'ingreso' : 'egreso';
+        const montoNum = Math.abs(Number(monto)) || 0;
+        if (montoNum <= 0) {
+            return { success: false, error: 'El monto debe ser mayor a 0.' };
+        }
+        if (!motivo || !motivo.trim()) {
+            return { success: false, error: 'El motivo es obligatorio.' };
+        }
+
+        const movId = crypto.randomUUID();
+        const fecha = new Date().toISOString();
+
+        const tx = db.transaction(() => {
+            db.prepare(`
+                INSERT INTO cajas_movimientos (id, turnoId, tipo, monto, motivo, fecha)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `).run(movId, turnoId, tipoNorm, montoNum, motivo.trim(), fecha);
+
+            if (tipoNorm === 'ingreso') {
+                db.prepare("UPDATE cajas_turnos SET totalIngresos = totalIngresos + ? WHERE id = ?").run(montoNum, turnoId);
+            } else {
+                db.prepare("UPDATE cajas_turnos SET totalEgresos = totalEgresos + ? WHERE id = ?").run(montoNum, turnoId);
+            }
+
+            const movData = { id: movId, turnoId, tipo: tipoNorm, monto: montoNum, motivo: motivo.trim(), fecha };
+            db.prepare(`
+                INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json)
+                VALUES ('caja_movimiento', ?, 'INSERT', ?)
+            `).run(movId, JSON.stringify(movData));
+
+            return movData;
+        });
+
+        const movimiento = tx();
+        return { success: true, movimiento };
+    } catch (err) {
+        console.error('Error al registrar movimiento de caja:', err);
+        return { success: false, error: err.message };
+    }
+}
+
+function cerrarTurno(turnoId, montoFinalReal, observaciones = '') {
+    try {
+        const turno = db.prepare("SELECT * FROM cajas_turnos WHERE id = ? AND estado = 'abierta'").get(turnoId);
+        if (!turno) {
+            return { success: false, error: 'Turno de caja no encontrado o ya cerrado.' };
+        }
+
+        const realNum = Number(montoFinalReal) || 0;
+        const montoEsperado = Math.round((Number(turno.montoInicial) + Number(turno.totalVentasEfectivo) + Number(turno.totalIngresos) - Number(turno.totalEgresos)) * 100) / 100;
+        const diferencia = Math.round((realNum - montoEsperado) * 100) / 100;
+        const fechaCierre = new Date().toISOString();
+
+        db.prepare(`
+            UPDATE cajas_turnos 
+            SET fechaCierre = ?, montoFinalReal = ?, montoEsperado = ?, diferencia = ?, estado = 'cerrada', observaciones = ?
+            WHERE id = ?
+        `).run(fechaCierre, realNum, montoEsperado, diferencia, observaciones || null, turnoId);
+
+        const turnoCerrado = db.prepare("SELECT * FROM cajas_turnos WHERE id = ?").get(turnoId);
+
+        // Encolar sincronización a Firestore
+        db.prepare(`
+            INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json)
+            VALUES ('caja_turno', ?, 'UPDATE', ?)
+        `).run(turnoId, JSON.stringify(turnoCerrado));
+
+        return { success: true, turno: turnoCerrado };
+    } catch (err) {
+        console.error('Error al cerrar turno de caja:', err);
+        return { success: false, error: err.message };
+    }
+}
+
+function obtenerHistorialTurnos(limite = 30) {
+    try {
+        const turnos = db.prepare(`
+            SELECT * FROM cajas_turnos 
+            ORDER BY fechaApertura DESC 
+            LIMIT ?
+        `).all(limite);
+
+        return { success: true, turnos };
+    } catch (err) {
+        console.error('Error al obtener historial de turnos:', err);
+        return { success: false, error: err.message };
+    }
+}
+
 module.exports = {
     db,
     buscarProductoPorCodigo,
@@ -1109,6 +1350,11 @@ module.exports = {
     eliminarListaCompra,
     limpiarUsuariosLocales,
     obtenerDashboardDataLocal,
-    purgarColaSync
+    purgarColaSync,
+    abrirTurno,
+    obtenerTurnoActual,
+    registrarMovimientoCaja,
+    cerrarTurno,
+    obtenerHistorialTurnos
 };
 

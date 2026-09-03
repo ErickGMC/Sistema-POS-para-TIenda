@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { usePosStore } from '../../store/usePosStore';
-import { Search, ShoppingCart, CreditCard, Banknote, Trash2, X, MessageCircle, CheckCircle2, Phone, Image as ImageIcon, List, LayoutGrid, PlusCircle, FileText } from 'lucide-react';
+import { Search, ShoppingCart, CreditCard, Banknote, Trash2, X, MessageCircle, CheckCircle2, Phone, Image as ImageIcon, List, LayoutGrid, PlusCircle, FileText, AlertCircle } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import { generarHtmlTicket } from '../../utils/ticketPrinter';
 
@@ -16,7 +16,20 @@ export default function CajaRegistradora() {
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [cargandoCobro, setCargandoCobro] = useState(false);
+  const [cajaAbierta, setCajaAbierta] = useState<boolean | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const verificarTurno = async () => {
+      try {
+        const res = await (window as any).electron?.obtenerTurnoActual();
+        setCajaAbierta(Boolean(res?.success && res?.turno));
+      } catch (_) {
+        setCajaAbierta(true);
+      }
+    };
+    verificarTurno();
+  }, [cargandoCobro]);
 
   // Modal Ítem Libre / Servicio
   const [customModalOpen, setCustomModalOpen] = useState(false);
@@ -205,7 +218,7 @@ export default function CajaRegistradora() {
   const handleGuardarItemPersonalizado = (e: React.FormEvent) => {
     e.preventDefault();
     const precio = parseFloat(customPrecio) || 0;
-    const cantidad = parseInt(customCantidad) || 1;
+    const cantidad = parseFloat(customCantidad) || 1;
     if (!customNombre.trim()) {
       mostrarMensaje('Ingresa un nombre para el ítem o servicio');
       return;
@@ -377,6 +390,16 @@ export default function CajaRegistradora() {
       {/* Panel Izquierdo: Buscador y Grilla rápida */}
       <div className="flex-1 min-w-0 flex flex-col border-r border-slate-300">
         
+        {/* Alerta de Caja Cerrada */}
+        {cajaAbierta === false && (
+          <div className="bg-amber-500 text-amber-950 px-4 py-2 text-xs font-bold flex items-center justify-between shadow-xs">
+            <span className="flex items-center gap-2">
+              <AlertCircle size={16} className="shrink-0 text-amber-950" />
+              Atención: La caja registradora está cerrada. Abre un turno en la pestaña "Control de Caja" para un arqueo de efectivo exacto.
+            </span>
+          </div>
+        )}
+
         {/* Topbar Buscador */}
         <div className="p-4 bg-slate-100 shadow-md">
           <form onSubmit={buscarYAgregar} className="relative">

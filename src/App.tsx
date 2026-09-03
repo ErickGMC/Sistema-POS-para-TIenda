@@ -6,14 +6,15 @@ import Login from './components/auth/Login';
 import HistorialVentas from './components/pos/HistorialVentas';
 import WebAdmin from './components/web/WebAdmin';
 import SetupFirebase from './components/auth/SetupFirebase';
+import ControlCaja from './components/cash/ControlCaja';
 import { useAuthStore } from './store/useAuthStore';
 import { useUIStore } from './store/useUIStore';
 import GlobalLoading from './components/ui/GlobalLoading';
 import GlobalDialog from './components/ui/GlobalDialog';
-import { ShoppingCart, Package, Users, LogOut, Cloud, CloudOff, RefreshCw, Check, X, Receipt, Globe, ShieldAlert, CloudDownload, MessageCircle } from 'lucide-react';
+import { ShoppingCart, Package, Users, LogOut, Cloud, CloudOff, RefreshCw, Check, X, Receipt, Globe, ShieldAlert, CloudDownload, MessageCircle, Wallet } from 'lucide-react';
 
 function App() {
-  const [vistaActiva, setVistaActiva] = useState<'pos' | 'ventas' | 'inventario' | 'usuarios' | 'web'>('pos');
+  const [vistaActiva, setVistaActiva] = useState<'pos' | 'caja' | 'ventas' | 'inventario' | 'usuarios' | 'web'>('pos');
   const { isAuthenticated, user, logout } = useAuthStore();
   const { setLoading } = useUIStore();
   const [online, setOnline] = useState(navigator.onLine);
@@ -281,6 +282,16 @@ function App() {
             </button>
           )}
           
+          {hasPermission('ventas:cobrar') && (
+            <button 
+              onClick={() => setVistaActiva('caja')}
+              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'caja' ? 'bg-teal-500 text-white scale-105 shadow-lg shadow-teal-500/20' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
+              title="Control de Turnos y Arqueo de Caja"
+            >
+              <Wallet size={26} strokeWidth={2.5} />
+            </button>
+          )}
+          
           {hasPermission('ventas:historial') && (
             <button 
               onClick={() => setVistaActiva('ventas')}
@@ -421,6 +432,10 @@ function App() {
         <div className="flex-1 h-full overflow-hidden relative">
           <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'pos' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
             {vistaActiva === 'pos' && hasPermission('ventas:cobrar') && <CajaRegistradora />}
+          </div>
+
+          <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'caja' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+            {vistaActiva === 'caja' && <ControlCaja />}
           </div>
 
           <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'ventas' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>

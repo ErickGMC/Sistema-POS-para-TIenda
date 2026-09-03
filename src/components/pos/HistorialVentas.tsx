@@ -70,21 +70,27 @@ export default function HistorialVentas() {
     setFiltros({ ...filtros, [e.target.name]: e.target.value });
   };
 
+  const formatLocalDate = (d: Date) => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const aplicarPresetFecha = (preset: 'hoy' | 'ayer' | 'mes' | 'limpiar') => {
     const hoy = new Date();
-    const hoyStr = hoy.toISOString().split('T')[0];
+    const hoyStr = formatLocalDate(hoy);
     
     if (preset === 'hoy') {
       setFiltros(prev => ({ ...prev, fechaInicio: hoyStr, fechaFin: hoyStr }));
     } else if (preset === 'ayer') {
       const ayer = new Date();
       ayer.setDate(hoy.getDate() - 1);
-      const ayerStr = ayer.toISOString().split('T')[0];
+      const ayerStr = formatLocalDate(ayer);
       setFiltros(prev => ({ ...prev, fechaInicio: ayerStr, fechaFin: ayerStr }));
     } else if (preset === 'mes') {
       const primerDiaMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
-      const tzOffset = primerDiaMes.getTimezoneOffset() * 60000;
-      const primerDiaStr = new Date(primerDiaMes.getTime() - tzOffset).toISOString().split('T')[0];
+      const primerDiaStr = formatLocalDate(primerDiaMes);
       setFiltros(prev => ({ ...prev, fechaInicio: primerDiaStr, fechaFin: hoyStr }));
     } else if (preset === 'limpiar') {
       setFiltros(prev => ({ ...prev, fechaInicio: '', fechaFin: '' }));

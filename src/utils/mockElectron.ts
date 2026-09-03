@@ -830,7 +830,48 @@ const mockProducts = [
       const idx = mockListas.findIndex(x => x.id === id);
       if (idx !== -1) mockListas.splice(idx, 1);
       return { success: true };
-    }
+    },
+    abrirTurno: async (montoInicial: number, cajero: string) => {
+      const nuevo = {
+        id: `shift-${Date.now()}`,
+        fechaApertura: new Date().toISOString(),
+        montoInicial: Number(montoInicial) || 0,
+        totalVentasEfectivo: 0,
+        totalVentasDigital: 0,
+        totalIngresos: 0,
+        totalEgresos: 0,
+        montoEsperado: Number(montoInicial) || 0,
+        estado: 'abierta',
+        cajero: cajero || 'Cajero Principal',
+        movimientos: []
+      };
+      (window as any)._mockCurrentShift = nuevo;
+      return { success: true, turno: nuevo };
+    },
+    obtenerTurnoActual: async () => {
+      return { success: true, turno: (window as any)._mockCurrentShift || null };
+    },
+    registrarMovimientoCaja: async ({ tipo, monto, motivo }: any) => {
+      const current = (window as any)._mockCurrentShift;
+      if (!current) return { success: false, error: 'No hay turno abierto' };
+      const mov = { id: `mov-${Date.now()}`, tipo, monto: Number(monto), motivo, fecha: new Date().toISOString() };
+      current.movimientos.unshift(mov);
+      if (tipo === 'ingreso') current.totalIngresos += Number(monto);
+      else current.totalEgresos += Number(monto);
+      current.montoEsperado = current.montoInicial + current.totalVentasEfectivo + current.totalIngresos - current.totalEgresos;
+      return { success: true, movimiento: mov };
+    },
+    cerrarTurno: async ({ montoFinalReal, observaciones }: any) => {
+      const current = (window as any)._mockCurrentShift;
+      if (!current) return { success: false, error: 'No hay turno abierto' };
+      current.estado = 'cerrada';
+      current.montoFinalReal = Number(montoFinalReal);
+      current.diferencia = current.montoFinalReal - current.montoEsperado;
+      current.observaciones = observaciones;
+      (window as any)._mockCurrentShift = null;
+      return { success: true, turno: current };
+    },
+    obtenerHistorialTurnos: async () => ({ success: true, turnos: [] })
   };
 }
 export {};

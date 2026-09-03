@@ -465,16 +465,32 @@ ipcMain.handle('db:anularVenta', (event, id) => {
   }
 });
 
-// Printing IPC
+// Printing IPC con timeout y captura de errores
 ipcMain.handle('printer:printTicket', async (event, htmlContent) => {
   return new Promise((resolve) => {
+    let resolved = false;
     const printWindow = new BrowserWindow({
       show: false,
       webPreferences: { nodeIntegration: false, contextIsolation: true }
     });
-    
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try { printWindow.close(); } catch (_) {}
+        resolve({ success: false, error: 'Tiempo de espera de impresión agotado' });
+      }
+    }, 10000);
+
     const dataUri = 'data:text/html;charset=utf-8,' + encodeURIComponent(htmlContent);
-    printWindow.loadURL(dataUri);
+    printWindow.loadURL(dataUri).catch(err => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeout);
+        try { printWindow.close(); } catch (_) {}
+        resolve({ success: false, error: err.message });
+      }
+    });
 
     printWindow.webContents.on('did-finish-load', () => {
       printWindow.webContents.print({ 
@@ -482,12 +498,46 @@ ipcMain.handle('printer:printTicket', async (event, htmlContent) => {
         printBackground: true, 
         margins: { marginType: 'none' } 
       }, (success, failureReason) => {
-        printWindow.close();
-        if (success) resolve({ success: true });
-        else resolve({ success: false, error: failureReason });
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          try { printWindow.close(); } catch (_) {}
+          if (success) resolve({ success: true });
+          else resolve({ success: false, error: failureReason });
+        }
       });
     });
+
+    printWindow.webContents.on('did-fail-load', (e, errorCode, errorDescription) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeout);
+        try { printWindow.close(); } catch (_) {}
+        resolve({ success: false, error: errorDescription });
+      }
+    });
   });
+});
+
+// Control de Caja, Turnos y Arqueo IPC
+ipcMain.handle('caja:abrirTurno', (event, montoInicial, cajero) => {
+  return db.abrirTurno(montoInicial, cajero);
+});
+
+ipcMain.handle('caja:obtenerTurnoActual', () => {
+  return db.obtenerTurnoActual();
+});
+
+ipcMain.handle('caja:registrarMovimiento', (event, { turnoId, tipo, monto, motivo }) => {
+  return db.registrarMovimientoCaja(turnoId, tipo, monto, motivo);
+});
+
+ipcMain.handle('caja:cerrarTurno', (event, { turnoId, montoFinalReal, observaciones }) => {
+  return db.cerrarTurno(turnoId, montoFinalReal, observaciones);
+});
+
+ipcMain.handle('caja:obtenerHistorial', (event, limite) => {
+  return db.obtenerHistorialTurnos(limite);
 });
 
 // Web Config & Banners IPC

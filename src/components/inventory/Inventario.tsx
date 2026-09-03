@@ -44,12 +44,12 @@ export default function Inventario() {
     id: window.crypto.randomUUID(),
     categoria: 'Abarrotes',
     unidadMedida: 'unidad',
-    disponible: false,
+    disponible: true,
     destacado: false,
     esPrincipalWeb: false,
     productoPadreId: '',
     etiquetaVariante: '',
-    mostrarPrecioWeb: false,
+    mostrarPrecioWeb: true,
     precio: 0,
     costo: 0,
     stock: 0,
@@ -127,12 +127,12 @@ export default function Inventario() {
       id: window.crypto.randomUUID(),
       categoria: 'Abarrotes',
       unidadMedida: 'unidad',
-      disponible: false,
+      disponible: true,
       destacado: false,
       esPrincipalWeb: false,
       productoPadreId: '',
       etiquetaVariante: '',
-      mostrarPrecioWeb: false,
+      mostrarPrecioWeb: true,
       precio: 0,
       costo: 0,
       stock: 0,
@@ -662,6 +662,10 @@ export default function Inventario() {
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={Boolean(form.destacado ?? false)} onChange={e => setForm({...form, destacado: e.target.checked})} className="w-4 h-4 accent-emerald-500 rounded" />
                 <span className="text-slate-700 text-xs font-semibold">Producto Destacado</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={Boolean(form.mostrarPrecioWeb ?? true)} onChange={e => setForm({...form, mostrarPrecioWeb: e.target.checked})} className="w-4 h-4 accent-emerald-500 rounded" />
+                <span className="text-slate-700 text-xs font-semibold">Mostrar Precio en la Web</span>
               </label>
             </div>
 

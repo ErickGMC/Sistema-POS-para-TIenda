@@ -185,6 +185,43 @@ async function runTestSuite() {
     const listaDelete = db.eliminarListaCompra(listaId);
     assert(listaDelete.success === true, 'db.eliminarListaCompra() debe eliminar la lista');
 
+    // ---------------------------------------------------------------
+    // TEST 10: Control de Caja, Turnos y Movimientos de Efectivo
+    // ---------------------------------------------------------------
+    console.log('\n💵 [Test Suite 10: Control de Turnos y Movimientos de Caja]');
+    // Si hubiese un turno residual abierto, cerrarlo primero
+    const residual = db.obtenerTurnoActual();
+    if (residual.success && residual.turno) {
+      db.cerrarTurno(residual.turno.id, residual.turno.montoEsperado, 'Cierre previo de prueba');
+    }
+
+    const abrirRes = db.abrirTurno(100.00, 'Cajero Test');
+    assert(abrirRes.success === true, 'db.abrirTurno() debe abrir turno con monto inicial');
+    assert(abrirRes.turno && abrirRes.turno.montoInicial === 100.00, 'El monto inicial debe ser 100.00');
+
+    const turnoAct = db.obtenerTurnoActual();
+    assert(turnoAct.success === true && turnoAct.turno !== null, 'db.obtenerTurnoActual() debe retornar el turno activo');
+
+    const ingRes = db.registrarMovimientoCaja(turnoAct.turno.id, 'ingreso', 50.00, 'Cambio inicial');
+    assert(ingRes.success === true, 'db.registrarMovimientoCaja() debe registrar ingreso');
+
+    const egRes = db.registrarMovimientoCaja(turnoAct.turno.id, 'egreso', 20.00, 'Pago de delivery');
+    assert(egRes.success === true, 'db.registrarMovimientoCaja() debe registrar egreso');
+
+    const turnoConMovs = db.obtenerTurnoActual();
+    // Monto esperado: 100 (inicial) + 50 (ingreso) - 20 (egreso) = 130
+    assert(turnoConMovs.turno.montoEsperado === 130.00, `El monto esperado debe ser 130.00 (Actual: ${turnoConMovs.turno.montoEsperado})`);
+    assert(turnoConMovs.turno.movimientos.length === 2, 'Debe registrar 2 movimientos en el turno');
+
+    // Cierre cuadrado
+    const cierreRes = db.cerrarTurno(turnoConMovs.turno.id, 130.00, 'Caja cuadrada');
+    assert(cierreRes.success === true, 'db.cerrarTurno() debe cerrar el turno');
+    assert(cierreRes.turno.diferencia === 0.00, `La diferencia debe ser 0.00 (Actual: ${cierreRes.turno.diferencia})`);
+    assert(cierreRes.turno.estado === 'cerrada', 'El estado del turno debe ser cerrada');
+
+    const historialTurnos = db.obtenerHistorialTurnos(5);
+    assert(historialTurnos.success === true && historialTurnos.turnos.length > 0, 'db.obtenerHistorialTurnos() debe retornar el historial');
+
   } catch (err) {
     console.error('CRITICAL ERROR IN SUITE:', err);
     failed++;

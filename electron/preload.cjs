@@ -68,5 +68,12 @@ contextBridge.exposeInMainWorld('electron', {
   eliminarListaCompra: (id) => ipcRenderer.invoke('db:eliminarListaCompra', id),
 
   // Storage Maintenance
-  limpiarArchivosHuerfanos: () => ipcRenderer.invoke('storage:limpiarArchivosHuerfanos')
+  limpiarArchivosHuerfanos: () => ipcRenderer.invoke('storage:limpiarArchivosHuerfanos'),
+
+  // Control de Caja, Turnos y Arqueo
+  abrirTurno: (montoInicial, cajero) => ipcRenderer.invoke('caja:abrirTurno', montoInicial, cajero),
+  obtenerTurnoActual: () => ipcRenderer.invoke('caja:obtenerTurnoActual'),
+  registrarMovimientoCaja: (data) => ipcRenderer.invoke('caja:registrarMovimiento', data),
+  cerrarTurno: (data) => ipcRenderer.invoke('caja:cerrarTurno', data),
+  obtenerHistorialTurnos: (limite) => ipcRenderer.invoke('caja:obtenerHistorial', limite)
 });

@@ -126,3 +126,34 @@ CREATE TABLE IF NOT EXISTS compras_listas_detalle (
     FOREIGN KEY(lista_id) REFERENCES compras_listas(id),
     FOREIGN KEY(producto_id) REFERENCES productos(id)
 );
+
+-- Tablas de Control de Caja, Turnos y Arqueo (Compatibilidad con AE_POS)
+CREATE TABLE IF NOT EXISTS cajas_turnos (
+    id TEXT PRIMARY KEY,
+    fechaApertura TEXT NOT NULL,
+    fechaCierre TEXT,
+    montoInicial REAL NOT NULL,
+    totalVentasEfectivo REAL DEFAULT 0.0,
+    totalVentasDigital REAL DEFAULT 0.0,
+    totalIngresos REAL DEFAULT 0.0,
+    totalEgresos REAL DEFAULT 0.0,
+    montoEsperado REAL DEFAULT 0.0,
+    montoFinalReal REAL,
+    diferencia REAL,
+    estado TEXT DEFAULT 'abierta', -- 'abierta' | 'cerrada'
+    cajero TEXT DEFAULT 'Cajero Principal',
+    observaciones TEXT,
+    creado_el DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS cajas_movimientos (
+    id TEXT PRIMARY KEY,
+    turnoId TEXT NOT NULL,
+    tipo TEXT NOT NULL, -- 'ingreso' | 'egreso'
+    monto REAL NOT NULL,
+    motivo TEXT NOT NULL,
+    fecha TEXT NOT NULL,
+    FOREIGN KEY(turnoId) REFERENCES cajas_turnos(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_cajas_movimientos_turno ON cajas_movimientos(turnoId);

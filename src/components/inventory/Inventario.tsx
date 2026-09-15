@@ -613,7 +613,7 @@ export default function Inventario() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">Stock <span className="text-rose-500 font-bold">*</span></label>
-                <input required type="number" step="1" value={form.stock === undefined ? '' : form.stock} onChange={e => setForm({...form, stock: e.target.value === '' ? ('' as any) : parseInt(e.target.value, 10)})} className="w-full bg-white border border-slate-350 shadow-sm rounded-lg p-2 text-sm text-slate-900 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all" />
+                <input required type="number" step={form.unidadMedida === 'kg' || form.unidadMedida === 'litro' ? '0.001' : '1'} value={form.stock === undefined ? '' : form.stock} onChange={e => setForm({...form, stock: e.target.value === '' ? ('' as any) : parseFloat(e.target.value)})} className="w-full bg-white border border-slate-350 shadow-sm rounded-lg p-2 text-sm text-slate-900 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all" />
               </div>
               <div>
                 <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">Medida <span className="text-rose-500 font-bold">*</span></label>
@@ -1013,7 +1013,7 @@ export default function Inventario() {
                               : 'bg-emerald-50 border-emerald-200 text-emerald-700'
                         }`}>
                           {prod.stock <= 0 && <AlertCircle size={11} />}
-                          {prod.stock} {prod.unidadMedida}
+                          {Number.isInteger(prod.stock) ? prod.stock : prod.stock.toFixed(3)} {prod.unidadMedida}
                         </span>
                       )}
                     </td>
@@ -1296,7 +1296,7 @@ export default function Inventario() {
                             <div key={p.id} className="p-2.5 flex items-center justify-between hover:bg-slate-50 text-xs">
                               <div>
                                 <div className="font-bold text-slate-800">{p.nombre}</div>
-                                <div className="text-[11px] text-slate-500">S/ {p.precio.toFixed(2)} • Stk: {p.stock} {p.unidadMedida}</div>
+                                <div className="text-[11px] text-slate-500">S/ {p.precio.toFixed(2)} • Stk: {Number.isInteger(p.stock) ? p.stock : p.stock.toFixed(3)} {p.unidadMedida}</div>
                               </div>
                               <button
                                 type="button"
@@ -1325,7 +1325,7 @@ export default function Inventario() {
                               <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
                                 <span className="font-semibold text-emerald-600">S/ {pres.precio.toFixed(2)}</span>
                                 <span>•</span>
-                                <span>Stk: {pres.stock} {pres.unidadMedida}</span>
+                                <span>Stk: {Number.isInteger(pres.stock) ? pres.stock : pres.stock.toFixed(3)} {pres.unidadMedida}</span>
                               </div>
                             </div>
 

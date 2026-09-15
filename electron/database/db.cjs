@@ -114,6 +114,26 @@ const migrations = [
             )
         `);
         db.exec("CREATE INDEX IF NOT EXISTS idx_cajas_movimientos_turno ON cajas_movimientos(turnoId)");
+    },
+    // Version 13 — Homologación total con AE_POS e índices de alto rendimiento
+    () => {
+        try { db.exec("ALTER TABLE ventas ADD COLUMN serie TEXT DEFAULT 'B001'"); } catch (_) {}
+        try { db.exec("ALTER TABLE ventas ADD COLUMN correlativoNumero INTEGER DEFAULT 1"); } catch (_) {}
+        try { db.exec("ALTER TABLE ventas ADD COLUMN numeroTicket TEXT"); } catch (_) {}
+        try { db.exec("ALTER TABLE usuarios ADD COLUMN nombreCompleto TEXT DEFAULT 'Usuario'"); } catch (_) {}
+        try { db.exec("ALTER TABLE usuarios ADD COLUMN pin TEXT DEFAULT '1234'"); } catch (_) {}
+        db.exec("CREATE INDEX IF NOT EXISTS idx_ventas_fecha ON ventas(fecha)");
+        db.exec("CREATE INDEX IF NOT EXISTS idx_ventas_detalle_venta ON ventas_detalle(venta_id)");
+        db.exec("CREATE INDEX IF NOT EXISTS idx_ventas_detalle_producto ON ventas_detalle(producto_id)");
+    },
+    // Version 14 — Tabla sync_meta para Delta Sync y control de versiones
+    () => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS sync_meta (
+                clave TEXT PRIMARY KEY,
+                valor TEXT
+            );
+        `);
     }
 ];
 
@@ -461,7 +481,10 @@ function login(identifier, password) {
         return { success: false, error: 'Usuario desactivado. Hable con el administrador.' };
     }
     
-    if (verifyPassword(password, user.password_hash, user.salt)) {
+    const isValidPass = verifyPassword(password, user.password_hash, user.salt);
+    const isValidPin = user.pin && user.pin === password;
+
+    if (isValidPass || isValidPin) {
         // Retornar usuario sin datos sensibles
         const { password_hash: _password_hash, salt: _salt, ...safeUser } = user;
         if (safeUser.permisos) {
@@ -475,12 +498,28 @@ function login(identifier, password) {
         }
         return { success: true, user: safeUser };
     }
-    return { success: false, error: 'Contraseña incorrecta' };
+    return { success: false, error: 'Contraseña o PIN incorrecto' };
+}
+
+function loginConPin(pin) {
+    const user = db.prepare('SELECT * FROM usuarios WHERE pin = ? AND (activo = 1 OR activo IS NULL)').get(pin);
+    if (!user) return { success: false, error: 'PIN incorrecto o usuario inactivo' };
+    const { password_hash: _password_hash, salt: _salt, ...safeUser } = user;
+    if (safeUser.permisos) {
+        try {
+            if (typeof safeUser.permisos === 'string') safeUser.permisos = JSON.parse(safeUser.permisos);
+        } catch {
+            safeUser.permisos = ['all'];
+        }
+    } else {
+        safeUser.permisos = safeUser.role === 'admin' ? ['all'] : [];
+    }
+    return { success: true, user: safeUser };
 }
 
 function obtenerUsuarios() {
     const users = db.prepare(`
-        SELECT u.id, u.username, u.email, u.role, u.permisos, u.activo, u.fecha_creacion,
+        SELECT u.id, u.username, u.email, u.role, u.permisos, u.activo, u.fecha_creacion, u.nombreCompleto, u.pin,
                (SELECT COUNT(*) FROM sync_queue WHERE entidad = 'usuario' AND entidad_id = u.id AND estado_sync = 0) as pendienteSync
         FROM usuarios u 
         ORDER BY u.username ASC
@@ -491,13 +530,16 @@ function obtenerUsuarios() {
 function crearUsuario(userData, password) {
     try {
         const { salt, hash } = hashPassword(password);
-        db.prepare('INSERT INTO usuarios (id, username, email, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-            userData.id, userData.username, userData.email || null, hash, salt, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, userData.activo !== undefined ? (userData.activo ? 1 : 0) : 1
+        const nombreCompleto = userData.nombreCompleto || userData.username;
+        const pin = userData.pin || '1234';
+        db.prepare('INSERT INTO usuarios (id, username, email, password_hash, salt, role, permisos, activo, nombreCompleto, pin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+            userData.id, userData.username, userData.email || null, hash, salt, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, userData.activo !== undefined ? (userData.activo ? 1 : 0) : 1, nombreCompleto, pin
         );
 
         // Agregar a Sync Queue
+        const syncData = { ...userData, nombreCompleto, pin };
         db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
-            'usuario', userData.id, 'INSERT', JSON.stringify(userData)
+            'usuario', userData.id, 'INSERT', JSON.stringify(syncData)
         );
 
         return { success: true };
@@ -509,15 +551,17 @@ function crearUsuario(userData, password) {
 function actualizarUsuario(userData, newPassword = null) {
     try {
         const activoVal = userData.activo !== undefined ? (userData.activo ? 1 : 0) : 1;
+        const nombreCompleto = userData.nombreCompleto !== undefined ? userData.nombreCompleto : null;
+        const pin = userData.pin !== undefined ? userData.pin : null;
         let info;
         if (newPassword && newPassword.trim() !== '') {
             const { salt, hash } = hashPassword(newPassword);
-            info = db.prepare('UPDATE usuarios SET username = ?, email = ?, role = ?, permisos = ?, password_hash = ?, salt = ?, activo = ? WHERE id = ?').run(
-                userData.username, userData.email || null, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, hash, salt, activoVal, userData.id
+            info = db.prepare('UPDATE usuarios SET username = ?, email = ?, role = ?, permisos = ?, password_hash = ?, salt = ?, activo = ?, nombreCompleto = COALESCE(?, nombreCompleto), pin = COALESCE(?, pin) WHERE id = ?').run(
+                userData.username, userData.email || null, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, hash, salt, activoVal, nombreCompleto, pin, userData.id
             );
         } else {
-            info = db.prepare('UPDATE usuarios SET username = ?, email = ?, role = ?, permisos = ?, activo = ? WHERE id = ?').run(
-                userData.username, userData.email || null, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, activoVal, userData.id
+            info = db.prepare('UPDATE usuarios SET username = ?, email = ?, role = ?, permisos = ?, activo = ?, nombreCompleto = COALESCE(?, nombreCompleto), pin = COALESCE(?, pin) WHERE id = ?').run(
+                userData.username, userData.email || null, userData.role, userData.permisos ? JSON.stringify(userData.permisos) : null, activoVal, nombreCompleto, pin, userData.id
             );
         }
 
@@ -525,6 +569,8 @@ function actualizarUsuario(userData, newPassword = null) {
             // Agregar a Sync Queue
             const syncData = { ...userData };
             if (newPassword && newPassword.trim() !== '') syncData.password = newPassword;
+            if (nombreCompleto) syncData.nombreCompleto = nombreCompleto;
+            if (pin) syncData.pin = pin;
             
             db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (?, ?, ?, ?)').run(
                 'usuario', userData.id, 'UPDATE', JSON.stringify(syncData)
@@ -636,7 +682,10 @@ function obtenerVentas(filtros = {}) {
 
 function guardarVenta(ventaParams, detalleVenta) {
     // Usar transacción para asegurar atomicidad
-    const insertVenta = db.prepare('INSERT INTO ventas (id, fecha, total, metodoPago, clienteNombre, clienteDocumento) VALUES (@id, @fecha, @total, @metodoPago, @clienteNombre, @clienteDocumento)');
+    const insertVenta = db.prepare(`
+        INSERT INTO ventas (id, fecha, total, metodoPago, clienteNombre, clienteDocumento, serie, correlativoNumero, numeroTicket) 
+        VALUES (@id, @fecha, @total, @metodoPago, @clienteNombre, @clienteDocumento, @serie, @correlativoNumero, @numeroTicket)
+    `);
     const insertDetalle = db.prepare('INSERT INTO ventas_detalle (id, venta_id, producto_id, cantidad, precio_unitario, subtotal) VALUES (@id, @venta_id, @producto_id, @cantidad, @precio_unitario, @subtotal)');
     const updateStock = db.prepare('UPDATE productos SET stock = stock - @cantidad WHERE id = @producto_id');
     const insertSync = db.prepare('INSERT INTO sync_queue (entidad, entidad_id, operacion, datos_json) VALUES (@entidad, @entidad_id, @operacion, @datos_json)');
@@ -646,7 +695,7 @@ function guardarVenta(ventaParams, detalleVenta) {
         let finalVentaId = vParams.id;
         // Si no se proveyó ID o si se requiere autogenerar (ej. para forzar secuencia)
         // Generaremos el ID secuencial siempre para ventas nuevas desde el POS
-        const serie = 'B001';
+        const serie = vParams.serie || 'B001';
         const row = getCorrelativo.get(serie);
         let num = 1;
         if (row) {
@@ -664,7 +713,14 @@ function guardarVenta(ventaParams, detalleVenta) {
         
         db.prepare('UPDATE correlativos SET siguiente_numero = ? WHERE serie = ?').run(num + 1, serie);
 
-        const v = { ...vParams, id: finalVentaId, fecha: new Date().toISOString() };
+        const v = { 
+            ...vParams, 
+            id: finalVentaId, 
+            fecha: new Date().toISOString(),
+            serie: serie,
+            correlativoNumero: num,
+            numeroTicket: finalVentaId
+        };
 
         insertVenta.run({ 
             id: v.id, 
@@ -672,7 +728,10 @@ function guardarVenta(ventaParams, detalleVenta) {
             total: v.total, 
             metodoPago: v.metodoPago,
             clienteNombre: v.clienteNombre || null,
-            clienteDocumento: v.clienteDocumento || null
+            clienteDocumento: v.clienteDocumento || null,
+            serie: v.serie,
+            correlativoNumero: v.correlativoNumero,
+            numeroTicket: v.numeroTicket
         });
         
         for (const item of d) {
@@ -691,6 +750,7 @@ function guardarVenta(ventaParams, detalleVenta) {
                     // Normalizar booleanos en el payload de Firebase
                     const prodSyncData = {
                         ...prodRow,
+                        _soloStock: true,
                         disponible: Boolean(prodRow.disponible),
                         destacado: Boolean(prodRow.destacado)
                     };
@@ -724,6 +784,15 @@ function guardarVenta(ventaParams, detalleVenta) {
                     db.prepare("UPDATE cajas_turnos SET totalVentasEfectivo = totalVentasEfectivo + ? WHERE id = ?").run(v.total, activeShift.id);
                 } else {
                     db.prepare("UPDATE cajas_turnos SET totalVentasDigital = totalVentasDigital + ? WHERE id = ?").run(v.total, activeShift.id);
+                }
+                const updatedShift = db.prepare("SELECT * FROM cajas_turnos WHERE id = ?").get(activeShift.id);
+                if (updatedShift) {
+                    insertSync.run({
+                        entidad: 'caja_turno',
+                        entidad_id: updatedShift.id,
+                        operacion: 'UPDATE',
+                        datos_json: JSON.stringify(updatedShift)
+                    });
                 }
             }
         } catch (_) {}
@@ -775,6 +844,7 @@ function anularVenta(ventaId) {
                 // Normalizar booleanos en el payload de Firebase
                 const prodSyncData = {
                     ...prodRow,
+                    _soloStock: true,
                     disponible: Boolean(prodRow.disponible),
                     destacado: Boolean(prodRow.destacado)
                 };
@@ -1000,26 +1070,28 @@ function eliminarBanner(id) {
     }
 }
 
-function registrarUsuarioDesdeFirebase(id, username, email, password, role, permisos = null, activo = 1) {
+function registrarUsuarioDesdeFirebase(id, username, email, password, role, permisos = null, activo = 1, nombreCompleto = null, pin = null) {
     try {
         const { salt, hash } = hashPassword(password);
         const termUsername = (username || '').trim();
         const termEmail = (email || '').trim();
-        const existing = db.prepare('SELECT id, username, email, role, permisos, activo FROM usuarios WHERE id = ? OR LOWER(username) = LOWER(?) OR (email IS NOT NULL AND LOWER(email) = LOWER(?))').get(id, termUsername, termEmail);
+        const existing = db.prepare('SELECT id, username, email, role, permisos, activo, nombreCompleto, pin FROM usuarios WHERE id = ? OR LOWER(username) = LOWER(?) OR (email IS NOT NULL AND LOWER(email) = LOWER(?))').get(id, termUsername, termEmail);
         
         const finalUsername = termUsername || (existing ? existing.username : (termEmail ? termEmail.split('@')[0] : id));
         const finalEmail = termEmail || (existing ? existing.email : null);
         const finalRole = role || (existing ? existing.role : 'admin');
         const finalPermisos = permisos ? (typeof permisos === 'string' ? permisos : JSON.stringify(permisos)) : (existing ? existing.permisos : null);
         const finalActivo = activo !== undefined && activo !== null ? (activo ? 1 : 0) : 1;
+        const finalNombreCompleto = nombreCompleto || (existing && existing.nombreCompleto) || finalUsername;
+        const finalPin = pin || (existing && existing.pin) || '1234';
 
         if (existing) {
-            db.prepare('UPDATE usuarios SET username = ?, email = ?, password_hash = ?, salt = ?, role = ?, permisos = ?, activo = ? WHERE id = ?').run(
-                finalUsername, finalEmail, hash, salt, finalRole, finalPermisos, finalActivo, existing.id
+            db.prepare('UPDATE usuarios SET username = ?, email = ?, password_hash = ?, salt = ?, role = ?, permisos = ?, activo = ?, nombreCompleto = COALESCE(?, nombreCompleto), pin = COALESCE(?, pin) WHERE id = ?').run(
+                finalUsername, finalEmail, hash, salt, finalRole, finalPermisos, finalActivo, nombreCompleto, pin, existing.id
             );
         } else {
-            db.prepare('INSERT INTO usuarios (id, username, email, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-                id, finalUsername, finalEmail, hash, salt, finalRole, finalPermisos, finalActivo
+            db.prepare('INSERT INTO usuarios (id, username, email, password_hash, salt, role, permisos, activo, nombreCompleto, pin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+                id, finalUsername, finalEmail, hash, salt, finalRole, finalPermisos, finalActivo, finalNombreCompleto, finalPin
             );
         }
         return { success: true };
@@ -1318,6 +1390,23 @@ function obtenerHistorialTurnos(limite = 30) {
     }
 }
 
+function getSyncMeta(clave) {
+    try {
+        const row = db.prepare('SELECT valor FROM sync_meta WHERE clave = ?').get(clave);
+        return row ? row.valor : null;
+    } catch {
+        return null;
+    }
+}
+
+function setSyncMeta(clave, valor) {
+    try {
+        db.prepare('INSERT OR REPLACE INTO sync_meta (clave, valor) VALUES (?, ?)').run(clave, String(valor));
+    } catch (err) {
+        console.warn('Error guardando sync_meta:', err.message);
+    }
+}
+
 module.exports = {
     db,
     buscarProductoPorCodigo,
@@ -1330,9 +1419,10 @@ module.exports = {
     actualizarProducto,
     eliminarProducto,
     guardarVenta,
-    anularVenta,
     obtenerVentas,
+    anularVenta,
     login,
+    loginConPin,
     obtenerUsuarios,
     crearUsuario,
     actualizarUsuario,
@@ -1355,6 +1445,8 @@ module.exports = {
     obtenerTurnoActual,
     registrarMovimientoCaja,
     cerrarTurno,
-    obtenerHistorialTurnos
+    obtenerHistorialTurnos,
+    getSyncMeta,
+    setSyncMeta
 };
 

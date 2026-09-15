@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electron', {
   
   // Auth y Usuarios
   login: (username, password) => ipcRenderer.invoke('auth:login', { username, password }),
+  loginConPin: (pin) => ipcRenderer.invoke('auth:loginConPin', pin),
   obtenerUsuarios: () => ipcRenderer.invoke('usuarios:obtener'),
   crearUsuario: (userData, password) => ipcRenderer.invoke('usuarios:crear', { userData, password }),
   actualizarUsuario: (userData, newPassword) => ipcRenderer.invoke('usuarios:actualizar', { userData, newPassword }),
@@ -49,6 +50,21 @@ contextBridge.exposeInMainWorld('electron', {
     const listener = (_, msg) => callback(msg);
     ipcRenderer.on('sync:status', listener);
     return () => ipcRenderer.removeListener('sync:status', listener);
+  },
+  onProductsChanged: (callback) => {
+    const listener = (_, info) => callback(info);
+    ipcRenderer.on('sync:productsChanged', listener);
+    return () => ipcRenderer.removeListener('sync:productsChanged', listener);
+  },
+  onVentasChanged: (callback) => {
+    const listener = (_, info) => callback(info);
+    ipcRenderer.on('sync:ventasChanged', listener);
+    return () => ipcRenderer.removeListener('sync:ventasChanged', listener);
+  },
+  onCajasChanged: (callback) => {
+    const listener = (_, info) => callback(info);
+    ipcRenderer.on('sync:cajasChanged', listener);
+    return () => ipcRenderer.removeListener('sync:cajasChanged', listener);
   },
   
   // Web Config & Banners

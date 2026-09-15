@@ -51,7 +51,7 @@ export function generarHtmlTicket(
     .map(
       (item) => `
     <tr>
-      <td style="padding: 3px 0; font-size: 11px;">${item.cantidad.toFixed(2)}</td>
+      <td style="padding: 3px 0; font-size: 11px;">${Number.isInteger(item.cantidad) ? item.cantidad.toString() : item.cantidad.toFixed(3)}</td>
       <td style="padding: 3px 0; font-size: 11px; max-width: 140px; word-wrap: break-word;">${item.nombre}</td>
       <td style="padding: 3px 0; text-align: right; font-size: 11px;">S/ ${Number(item.precio).toFixed(2)}</td>
       <td style="padding: 3px 0; text-align: right; font-size: 11px;">S/ ${(item.cantidad * item.precio).toFixed(2)}</td>

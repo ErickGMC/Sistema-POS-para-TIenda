@@ -1,20 +1,22 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import CajaRegistradora from './components/pos/CajaRegistradora';
-import Inventario from './components/inventory/Inventario';
-import GestionUsuarios from './components/users/GestionUsuarios';
 import Login from './components/auth/Login';
-import HistorialVentas from './components/pos/HistorialVentas';
-import WebAdmin from './components/web/WebAdmin';
-import SetupFirebase from './components/auth/SetupFirebase';
-import ControlCaja from './components/cash/ControlCaja';
 import { useAuthStore } from './store/useAuthStore';
 import { useUIStore } from './store/useUIStore';
 import GlobalLoading from './components/ui/GlobalLoading';
 import GlobalDialog from './components/ui/GlobalDialog';
-import { ShoppingCart, Package, Users, LogOut, Cloud, CloudOff, RefreshCw, Check, X, Receipt, Globe, ShieldAlert, CloudDownload, MessageCircle, Wallet } from 'lucide-react';
+import { ShoppingCart, Package, Users, LogOut, Cloud, CloudOff, RefreshCw, Check, X, Receipt, Globe, ShieldAlert, CloudDownload, MessageCircle, Wallet, ClipboardList } from 'lucide-react';
+
+const Inventario = lazy(() => import('./components/inventory/Inventario'));
+const ListaCompras = lazy(() => import('./components/shopping/ListaCompras'));
+const GestionUsuarios = lazy(() => import('./components/users/GestionUsuarios'));
+const HistorialVentas = lazy(() => import('./components/pos/HistorialVentas'));
+const WebAdmin = lazy(() => import('./components/web/WebAdmin'));
+const SetupFirebase = lazy(() => import('./components/auth/SetupFirebase'));
+const ControlCaja = lazy(() => import('./components/cash/ControlCaja'));
 
 function App() {
-  const [vistaActiva, setVistaActiva] = useState<'pos' | 'caja' | 'ventas' | 'inventario' | 'usuarios' | 'web'>('pos');
+  const [vistaActiva, setVistaActiva] = useState<'pos' | 'caja' | 'ventas' | 'inventario' | 'compras' | 'usuarios' | 'web'>('pos');
   const { isAuthenticated, user, logout } = useAuthStore();
   const { setLoading } = useUIStore();
   const [online, setOnline] = useState(navigator.onLine);
@@ -186,7 +188,9 @@ function App() {
     return (
       <>
         <GlobalLoading />
-        <SetupFirebase onSuccess={() => setIsFirebaseConfigured(true)} />
+        <Suspense fallback={<div className="h-screen w-screen bg-slate-50 flex items-center justify-center">Cargando configuración...</div>}>
+          <SetupFirebase onSuccess={() => setIsFirebaseConfigured(true)} />
+        </Suspense>
       </>
     );
   }
@@ -312,6 +316,16 @@ function App() {
             </button>
           )}
           
+          {hasPermission('inventario:modificar') && (
+            <button 
+              onClick={() => setVistaActiva('compras')}
+              className={`p-3.5 rounded-2xl transition-all duration-300 flex items-center justify-center ${vistaActiva === 'compras' ? 'bg-amber-500 text-white scale-105 shadow-lg shadow-amber-500/20' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
+              title="Lista de Compras y Reabastecimiento"
+            >
+              <ClipboardList size={26} strokeWidth={2.5} />
+            </button>
+          )}
+          
           {hasPermission('usuarios:gestionar') && (
             <button 
               onClick={() => setVistaActiva('usuarios')}
@@ -434,25 +448,36 @@ function App() {
             {vistaActiva === 'pos' && hasPermission('ventas:cobrar') && <CajaRegistradora />}
           </div>
 
-          <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'caja' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-            {vistaActiva === 'caja' && <ControlCaja />}
-          </div>
+          <Suspense fallback={
+            <div className="h-full flex flex-col items-center justify-center bg-white text-slate-500">
+              <RefreshCw size={24} className="animate-spin text-emerald-600 mb-2" />
+              <span className="text-xs font-semibold">Cargando módulo...</span>
+            </div>
+          }>
+            <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'caja' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+              {vistaActiva === 'caja' && <ControlCaja />}
+            </div>
 
-          <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'ventas' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-            {vistaActiva === 'ventas' && hasPermission('ventas:historial') && <HistorialVentas />}
-          </div>
-          
-          <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'inventario' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-            {vistaActiva === 'inventario' && hasPermission('inventario:modificar') && <Inventario />}
-          </div>
-          
-          <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'usuarios' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-            {vistaActiva === 'usuarios' && hasPermission('usuarios:gestionar') && <GestionUsuarios />}
-          </div>
-          
-          <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'web' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
-            {vistaActiva === 'web' && hasPermission('web:configurar') && <WebAdmin />}
-          </div>
+            <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'ventas' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+              {vistaActiva === 'ventas' && hasPermission('ventas:historial') && <HistorialVentas />}
+            </div>
+            
+            <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'inventario' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+              {vistaActiva === 'inventario' && hasPermission('inventario:modificar') && <Inventario />}
+            </div>
+
+            <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'compras' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+              {vistaActiva === 'compras' && hasPermission('inventario:modificar') && <ListaCompras />}
+            </div>
+            
+            <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'usuarios' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+              {vistaActiva === 'usuarios' && hasPermission('usuarios:gestionar') && <GestionUsuarios />}
+            </div>
+            
+            <div className={`absolute inset-0 transition-opacity duration-300 ${vistaActiva === 'web' ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}>
+              {vistaActiva === 'web' && hasPermission('web:configurar') && <WebAdmin />}
+            </div>
+          </Suspense>
         </div>
 
         {/* WhatsApp Panel Lateral */}

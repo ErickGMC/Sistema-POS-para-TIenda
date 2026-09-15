@@ -1,7 +1,7 @@
-const { db, limpiarUsuariosLocales, purgarColaSync } = require('../database/db.cjs');
+const { db, limpiarUsuariosLocales, purgarColaSync, getSyncMeta, setSyncMeta } = require('../database/db.cjs');
 const { initializeApp, deleteApp, getApps } = require('firebase/app');
-const { getFirestore, doc, getDoc, writeBatch, collection, getDocs, query, orderBy, limit, deleteField, vector } = require('firebase/firestore');
-const { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } = require('firebase/auth');
+const { getFirestore, doc, getDoc, writeBatch, collection, getDocs, query, where, orderBy, limit, deleteField, vector, onSnapshot, Timestamp, increment } = require('firebase/firestore');
+const { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged } = require('firebase/auth');
 const { getStorage, ref, uploadBytes, getDownloadURL, listAll, deleteObject } = require('firebase/storage');
 
 const fs = require('fs');
@@ -32,8 +32,9 @@ const EMBED_SECRET = process.env.EMBED_SECRET || 'pos_embed_secret_minimarket_fl
 const BATCH_LIMIT = 499;
 
 function getConfigPath() {
-    const { app: eApp } = require('electron');
-    const dbDir = eApp.isPackaged ? eApp.getPath('userData') : __dirname;
+    const electron = require('electron');
+    const eApp = electron && electron.app;
+    const dbDir = (eApp && typeof eApp.isPackaged !== 'undefined' && eApp.isPackaged) ? eApp.getPath('userData') : __dirname;
     return path.join(dbDir, 'firebase_config.json');
 }
 
@@ -145,6 +146,18 @@ function initFirebase() {
         secondaryApp = initializeApp(firebaseConfig, 'SecondaryAuthApp');
         secondaryAuth = getAuth(secondaryApp);
 
+        if (auth) {
+            onAuthStateChanged(auth, (currentUser) => {
+                if (currentUser) {
+                    console.log(`[Auth] Sesión activa en Firebase (${currentUser.email || currentUser.uid}).`);
+                    iniciarEscuchaTiempoReal();
+                    sincronizarCola().catch(err => console.error("Error sync onAuthStateChanged:", err));
+                } else {
+                    console.log('[Auth] Sesión inactiva en Firebase.');
+                    detenerEscuchaTiempoReal();
+                }
+            });
+        }
     } catch(e) {
         console.error("Firebase init error:", e);
     }
@@ -466,29 +479,11 @@ async function sincronizarCola() {
                         fechaString: v.fecha || new Date().toISOString(),
                         fecha: Timestamp.now(),
                         anulado: Boolean(v.anulado),
-                        origen: 'TIENDA_POS_DESKTOP'
+                        origen: 'TIENDA_POS_DESKTOP',
+                        items: data.detalle || []
                     };
+                    // Guardado atómico en 1 sola escritura: Documento raíz con arreglo 'items'
                     batch.set(docRef, salePayload, { merge: true });
-
-                    // Formato 1: Documento 'items' con array (compatible con POS Desktop legado)
-                    const detalleRef = doc(firestore, `ventas/${reg.entidad_id}/detalle`, 'items');
-                    batch.set(detalleRef, { items: data.detalle || [] });
-
-                    // Formato 2: Documentos individuales (compatible con AE_POS Android)
-                    if (Array.isArray(data.detalle)) {
-                        for (const itm of data.detalle) {
-                            const itemId = itm.id || crypto.randomUUID();
-                            const itemDocRef = doc(firestore, `ventas/${reg.entidad_id}/detalle`, itemId);
-                            batch.set(itemDocRef, {
-                                id: itemId,
-                                venta_id: reg.entidad_id,
-                                producto_id: itm.producto_id || itm.productoId || '',
-                                cantidad: Number(itm.cantidad) || 1,
-                                precio_unitario: Number(itm.precio_unitario || itm.precioUnitario || 0),
-                                subtotal: Number(itm.subtotal) || 0
-                            });
-                        }
-                    }
                 } else if (reg.entidad === 'producto') {
                     const docRef = doc(firestore, 'productos', reg.entidad_id);
                     if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
@@ -529,18 +524,25 @@ async function sincronizarCola() {
                         // Normalizar etiquetas a array limpio de strings
                         finalData.etiquetas = parsearEtiquetasSync(finalData.etiquetas);
 
+                        // Si viene marcado como actualización únicamente de stock (ej. desde una venta o anulación),
+                        // omitimos recalcular los embeddings de Gemini para cuidar la cuota y agilizar el batch
+                        const esSoloStock = finalData._soloStock === true;
+                        delete finalData._soloStock;
+
                         // Generar e incluir texto_rag y vector de embedding nativo (768 dims)
-                        try {
-                            const textoRAG = construirTextoRAGSync(finalData);
-                            finalData.texto_rag = textoRAG;
-                            const vectorVal = await obtenerVectorEmbedding(textoRAG);
-                            if (vectorVal) {
-                                finalData.embedding = vectorVal;
-                                finalData.embedding_generado_en = new Date().toISOString();
-                                finalData.modelo_embedding = 'gemini-embedding-2';
+                        if (!esSoloStock) {
+                            try {
+                                const textoRAG = construirTextoRAGSync(finalData);
+                                finalData.texto_rag = textoRAG;
+                                const vectorVal = await obtenerVectorEmbedding(textoRAG);
+                                if (vectorVal) {
+                                    finalData.embedding = vectorVal;
+                                    finalData.embedding_generado_en = new Date().toISOString();
+                                    finalData.modelo_embedding = 'gemini-embedding-2';
+                                }
+                            } catch (embedErr) {
+                                console.warn(`[Sync] Warning generando embedding para ${finalData.nombre}:`, embedErr.message);
                             }
-                        } catch (embedErr) {
-                            console.warn(`[Sync] Warning generando embedding para ${finalData.nombre}:`, embedErr.message);
                         }
 
                         batch.set(docRef, finalData, { merge: true });
@@ -555,6 +557,8 @@ async function sincronizarCola() {
                     delete usuarioData.password;
                     delete usuarioData.password_hash;
                     delete usuarioData.salt;
+                    if (!usuarioData.nombreCompleto) usuarioData.nombreCompleto = usuarioData.username || 'Usuario';
+                    if (!usuarioData.pin) usuarioData.pin = '1234';
                     
                     if (reg.operacion === 'INSERT' || reg.operacion === 'UPDATE') {
                         batch.set(docRef, usuarioData, { merge: true });
@@ -688,10 +692,433 @@ async function sincronizarCola() {
 }
 
 let syncInterval = null;
+let unsubscribeProductos = null;
+let unsubscribeVentas = null;
+let unsubscribeCajasTurnos = null;
+let unsubscribeCajasMovimientos = null;
+let mainWindowRef = null;
 
-function startSyncWorker() {
+function setMainWindow(win) {
+    mainWindowRef = win;
+}
+
+function iniciarEscuchaTiempoReal() {
+    if (!firestore || !auth || !auth.currentUser) return;
+    detenerEscuchaTiempoReal();
+
+    // 1. Escucha en tiempo real de Productos (Delta Sync optimizado)
+    try {
+        console.log('[Realtime] Activando escucha en tiempo real de productos en Firestore (Delta Sync)...');
+        const prodCol = collection(firestore, 'productos');
+        const lastSync = getSyncMeta('last_products_sync');
+
+        // Si ya tenemos fecha de sincronización, consultar solo los modificados después de esa fecha
+        const qProd = lastSync
+            ? query(prodCol, where('updatedAt', '>', lastSync))
+            : prodCol;
+        
+        let isFirstSnapshot = true;
+        unsubscribeProductos = onSnapshot(qProd, (snapshot) => {
+            if (isFirstSnapshot) {
+                isFirstSnapshot = false;
+                if (!lastSync) {
+                    setSyncMeta('last_products_sync', new Date().toISOString());
+                    return;
+                }
+            }
+
+            const changes = snapshot.docChanges();
+            if (!changes || changes.length === 0) return;
+
+            const updateProdStmt = db.prepare(`
+                UPDATE productos 
+                SET stock = @stock,
+                    precio = @precio,
+                    nombre = COALESCE(@nombre, nombre),
+                    disponible = @disponible
+                WHERE id = @id
+            `);
+
+            const insertProdStmt = db.prepare(`
+                INSERT OR IGNORE INTO productos (
+                    id, codigoBarras, nombre, descripcion, categoria, precio, costo, stock, 
+                    unidadMedida, imagenUrl, disponible, destacado, esPrincipalWeb
+                ) VALUES (
+                    @id, @codigoBarras, @nombre, @descripcion, @categoria, @precio, @costo, @stock,
+                    @unidadMedida, @imagenUrl, @disponible, @destacado, @esPrincipalWeb
+                )
+            `);
+
+            const checkProdStmt = db.prepare('SELECT id, stock, precio FROM productos WHERE id = ?');
+            let actualizados = 0;
+            let ultimoTimestamp = lastSync;
+
+            const tx = db.transaction(() => {
+                for (const change of changes) {
+                    const docId = change.doc.id;
+                    const data = change.doc.data();
+
+                    // Borrado Lógico (Soft Delete) desde la nube
+                    if (data.eliminado === true) {
+                        db.prepare('DELETE FROM productos WHERE id = ?').run(docId);
+                        actualizados++;
+                        continue;
+                    }
+
+                    if (data.updatedAt && (!ultimoTimestamp || data.updatedAt > ultimoTimestamp)) {
+                        ultimoTimestamp = data.updatedAt;
+                    }
+
+                    // Cachear imagen en disco local en segundo plano
+                    if (data.imagenUrl) {
+                        descargarYCachearImagen(docId, data.imagenUrl).catch(() => {});
+                    }
+
+                    if (change.type === 'added') {
+                        const local = checkProdStmt.get(docId);
+                        if (!local) {
+                            insertProdStmt.run({
+                                id: docId,
+                                codigoBarras: data.codigoBarras || null,
+                                nombre: data.nombre || '',
+                                descripcion: data.descripcion || null,
+                                categoria: data.categoria || 'Abarrotes',
+                                precio: Number(data.precio) || 0,
+                                costo: data.costo !== undefined ? Number(data.costo) : null,
+                                stock: Number(data.stock) || 0,
+                                unidadMedida: data.unidadMedida || 'unidad',
+                                imagenUrl: data.imagenUrl || data.imageUrl || null,
+                                disponible: data.disponible ? 1 : 0,
+                                destacado: data.destacado ? 1 : 0,
+                                esPrincipalWeb: data.esPrincipalWeb ? 1 : 0
+                            });
+                            actualizados++;
+                        }
+                    } else if (change.type === 'modified') {
+                        const local = checkProdStmt.get(docId);
+                        if (local) {
+                            const nuevoStock = Number(data.stock) || 0;
+                            const nuevoPrecio = Number(data.precio) || 0;
+                            if (local.stock !== nuevoStock || local.precio !== nuevoPrecio) {
+                                updateProdStmt.run({
+                                    id: docId,
+                                    stock: nuevoStock,
+                                    precio: nuevoPrecio,
+                                    nombre: data.nombre || null,
+                                    disponible: data.disponible ? 1 : 0
+                                });
+                                actualizados++;
+                            }
+                        }
+                    }
+                }
+            });
+
+            tx();
+
+            if (ultimoTimestamp && ultimoTimestamp !== lastSync) {
+                setSyncMeta('last_products_sync', ultimoTimestamp);
+            }
+
+            if (actualizados > 0) {
+                console.log(`[Realtime] ${actualizados} producto(s) sincronizados en tiempo real desde Firestore.`);
+                const { BrowserWindow } = require('electron');
+                BrowserWindow.getAllWindows().forEach(win => {
+                    if (!win.isDestroyed()) {
+                        win.webContents.send('sync:productsChanged', { count: actualizados });
+                    }
+                });
+            }
+        }, (error) => {
+            console.error('[Realtime] Error en escucha de productos Firestore:', error);
+        });
+    } catch (err) {
+        console.error('[Realtime] Error al inicializar onSnapshot de productos:', err);
+    }
+
+    // 2. Escucha en tiempo real de Ventas (Originadas en AE_POS móvil o Web)
+    try {
+        console.log('[Realtime] Activando escucha en tiempo real de ventas en Firestore...');
+        const ventasCol = collection(firestore, 'ventas');
+        const qVentas = query(ventasCol, orderBy('fechaString', 'desc'), limit(50));
+
+        let isFirstVentas = true;
+        unsubscribeVentas = onSnapshot(qVentas, async (snapshot) => {
+            if (isFirstVentas) {
+                isFirstVentas = false;
+                return;
+            }
+
+            const changes = snapshot.docChanges();
+            if (!changes || changes.length === 0) return;
+
+            const checkVentaStmt = db.prepare('SELECT id, anulado FROM ventas WHERE id = ?');
+            const insertVentaStmt = db.prepare(`
+                INSERT OR IGNORE INTO ventas (
+                    id, fecha, total, metodoPago, clienteNombre, clienteDocumento, anulado, serie, correlativoNumero, numeroTicket
+                ) VALUES (
+                    @id, @fecha, @total, @metodoPago, @clienteNombre, @clienteDocumento, @anulado, @serie, @correlativoNumero, @numeroTicket
+                )
+            `);
+            const updateAnuladoStmt = db.prepare('UPDATE ventas SET anulado = 1 WHERE id = ?');
+            const insertDetalleStmt = db.prepare(`
+                INSERT OR IGNORE INTO ventas_detalle (id, venta_id, producto_id, cantidad, precio_unitario, subtotal)
+                VALUES (@id, @venta_id, @producto_id, @cantidad, @precio_unitario, @subtotal)
+            `);
+
+            let ventasModificadas = 0;
+
+            for (const change of changes) {
+                const docId = change.doc.id;
+                const data = change.doc.data();
+
+                if (change.type === 'added') {
+                    const local = checkVentaStmt.get(docId);
+                    if (!local) {
+                        const serie = data.serie || 'B001';
+                        const correlativoNumero = Number(data.correlativoNumero) || 1;
+                        const numeroTicket = data.numeroTicket || `${serie}-${correlativoNumero.toString().padStart(8, '0')}`;
+                        let fechaIso = new Date().toISOString();
+                        if (data.fechaString) {
+                            fechaIso = data.fechaString;
+                        } else if (data.fecha && data.fecha.toDate) {
+                            fechaIso = data.fecha.toDate().toISOString();
+                        }
+
+                        insertVentaStmt.run({
+                            id: docId,
+                            fecha: fechaIso,
+                            total: Number(data.total) || 0,
+                            metodoPago: data.metodoPago || 'Efectivo',
+                            clienteNombre: data.clienteNombre || null,
+                            clienteDocumento: data.clienteDocumento || null,
+                            anulado: data.anulado ? 1 : 0,
+                            serie,
+                            correlativoNumero,
+                            numeroTicket
+                        });
+
+                        // Detalles de venta
+                        if (Array.isArray(data.items) && data.items.length > 0) {
+                            for (const itm of data.items) {
+                                insertDetalleStmt.run({
+                                    id: itm.id || require('crypto').randomUUID(),
+                                    venta_id: docId,
+                                    producto_id: itm.producto_id || itm.productoId || '',
+                                    cantidad: Number(itm.cantidad) || 1,
+                                    precio_unitario: Number(itm.precio_unitario || itm.precioUnitario || 0),
+                                    subtotal: Number(itm.subtotal) || 0
+                                });
+                            }
+                        } else {
+                            try {
+                                const detSnap = await getDocs(collection(firestore, `ventas/${docId}/detalle`));
+                                detSnap.forEach(detDoc => {
+                                    const detData = detDoc.data();
+                                    if (detDoc.id === 'items' && Array.isArray(detData.items)) {
+                                        for (const itm of detData.items) {
+                                            insertDetalleStmt.run({
+                                                id: itm.id || require('crypto').randomUUID(),
+                                                venta_id: docId,
+                                                producto_id: itm.producto_id || itm.productoId || '',
+                                                cantidad: Number(itm.cantidad) || 1,
+                                                precio_unitario: Number(itm.precio_unitario || itm.precioUnitario || 0),
+                                                subtotal: Number(itm.subtotal) || 0
+                                            });
+                                        }
+                                    } else if (detData.producto_id || detData.productoId) {
+                                        insertDetalleStmt.run({
+                                            id: detDoc.id || require('crypto').randomUUID(),
+                                            venta_id: docId,
+                                            producto_id: detData.producto_id || detData.productoId || '',
+                                            cantidad: Number(detData.cantidad) || 1,
+                                            precio_unitario: Number(detData.precio_unitario || detData.precioUnitario || 0),
+                                            subtotal: Number(detData.subtotal) || 0
+                                        });
+                                    }
+                                });
+                            } catch (_) {}
+                        }
+                        ventasModificadas++;
+                    }
+                } else if (change.type === 'modified') {
+                    const local = checkVentaStmt.get(docId);
+                    if (local && (data.anulado === true || data.anulado === 1) && !local.anulado) {
+                        updateAnuladoStmt.run(docId);
+                        ventasModificadas++;
+                    }
+                }
+            }
+
+            if (ventasModificadas > 0) {
+                console.log(`[Realtime] ${ventasModificadas} venta(s) sincronizadas en tiempo real desde Firestore.`);
+                const { BrowserWindow } = require('electron');
+                BrowserWindow.getAllWindows().forEach(win => {
+                    if (!win.isDestroyed()) {
+                        win.webContents.send('sync:ventasChanged', { count: ventasModificadas });
+                    }
+                });
+            }
+        }, (err) => {
+            console.error('[Realtime] Error en escucha de ventas Firestore:', err);
+        });
+    } catch (err) {
+        console.error('[Realtime] Error al inicializar onSnapshot de ventas:', err);
+    }
+
+    // 3. Escucha en tiempo real de Turnos de Caja
+    try {
+        console.log('[Realtime] Activando escucha en tiempo real de turnos de caja en Firestore...');
+        const turnosCol = collection(firestore, 'caja_turnos');
+        const qTurnos = query(turnosCol, orderBy('fechaApertura', 'desc'), limit(15));
+
+        let isFirstTurnos = true;
+        unsubscribeCajasTurnos = onSnapshot(qTurnos, (snapshot) => {
+            if (isFirstTurnos) {
+                isFirstTurnos = false;
+                return;
+            }
+            const changes = snapshot.docChanges();
+            if (!changes || changes.length === 0) return;
+
+            const upsertTurnoStmt = db.prepare(`
+                INSERT INTO cajas_turnos (
+                    id, fechaApertura, fechaCierre, montoInicial, totalVentasEfectivo, totalVentasDigital,
+                    totalIngresos, totalEgresos, montoEsperado, montoFinalReal, diferencia, estado, cajero, observaciones
+                ) VALUES (
+                    @id, @fechaApertura, @fechaCierre, @montoInicial, @totalVentasEfectivo, @totalVentasDigital,
+                    @totalIngresos, @totalEgresos, @montoEsperado, @montoFinalReal, @diferencia, @estado, @cajero, @observaciones
+                )
+                ON CONFLICT(id) DO UPDATE SET
+                    fechaCierre = excluded.fechaCierre,
+                    totalVentasEfectivo = excluded.totalVentasEfectivo,
+                    totalVentasDigital = excluded.totalVentasDigital,
+                    totalIngresos = excluded.totalIngresos,
+                    totalEgresos = excluded.totalEgresos,
+                    montoEsperado = excluded.montoEsperado,
+                    montoFinalReal = excluded.montoFinalReal,
+                    diferencia = excluded.diferencia,
+                    estado = excluded.estado,
+                    observaciones = excluded.observaciones
+            `);
+
+            const tx = db.transaction(() => {
+                for (const change of changes) {
+                    const docId = change.doc.id;
+                    const data = change.doc.data();
+                    upsertTurnoStmt.run({
+                        id: docId,
+                        fechaApertura: data.fechaApertura || new Date().toISOString(),
+                        fechaCierre: data.fechaCierre || null,
+                        montoInicial: Number(data.montoInicial) || 0,
+                        totalVentasEfectivo: Number(data.totalVentasEfectivo) || 0,
+                        totalVentasDigital: Number(data.totalVentasDigital) || 0,
+                        totalIngresos: Number(data.totalIngresos) || 0,
+                        totalEgresos: Number(data.totalEgresos) || 0,
+                        montoEsperado: Number(data.montoEsperado) || 0,
+                        montoFinalReal: (data.montoFinalReal !== undefined && data.montoFinalReal !== null && data.montoFinalReal !== '') ? Number(data.montoFinalReal) : null,
+                        diferencia: (data.diferencia !== undefined && data.diferencia !== null && data.diferencia !== '') ? Number(data.diferencia) : null,
+                        estado: data.estado || 'abierta',
+                        cajero: data.cajero || 'Cajero Principal',
+                        observaciones: data.observaciones || null
+                    });
+                }
+            });
+            tx();
+
+            const { BrowserWindow } = require('electron');
+            BrowserWindow.getAllWindows().forEach(win => {
+                if (!win.isDestroyed()) {
+                    win.webContents.send('sync:cajasChanged', { tipo: 'turnos' });
+                }
+            });
+        }, (err) => {
+            console.error('[Realtime] Error en escucha de turnos Firestore:', err);
+        });
+    } catch (err) {
+        console.error('[Realtime] Error al inicializar onSnapshot de turnos:', err);
+    }
+
+    // 4. Escucha en tiempo real de Movimientos de Caja
+    try {
+        console.log('[Realtime] Activando escucha en tiempo real de movimientos de caja en Firestore...');
+        const movsCol = collection(firestore, 'caja_movimientos');
+        const qMovs = query(movsCol, orderBy('fecha', 'desc'), limit(30));
+
+        let isFirstMovs = true;
+        unsubscribeCajasMovimientos = onSnapshot(qMovs, (snapshot) => {
+            if (isFirstMovs) {
+                isFirstMovs = false;
+                return;
+            }
+            const changes = snapshot.docChanges();
+            if (!changes || changes.length === 0) return;
+
+            const insertMovStmt = db.prepare(`
+                INSERT OR IGNORE INTO cajas_movimientos (id, turnoId, tipo, monto, motivo, fecha)
+                VALUES (@id, @turnoId, @tipo, @monto, @motivo, @fecha)
+            `);
+
+            const tx = db.transaction(() => {
+                for (const change of changes) {
+                    if (change.type === 'added') {
+                        const data = change.doc.data();
+                        insertMovStmt.run({
+                            id: change.doc.id,
+                            turnoId: data.turnoId || '',
+                            tipo: data.tipo || 'ingreso',
+                            monto: Number(data.monto) || 0,
+                            motivo: data.motivo || 'Movimiento',
+                            fecha: data.fecha || new Date().toISOString()
+                        });
+                    }
+                }
+            });
+            tx();
+
+            const { BrowserWindow } = require('electron');
+            BrowserWindow.getAllWindows().forEach(win => {
+                if (!win.isDestroyed()) {
+                    win.webContents.send('sync:cajasChanged', { tipo: 'movimientos' });
+                }
+            });
+        }, (err) => {
+            console.error('[Realtime] Error en escucha de movimientos Firestore:', err);
+        });
+    } catch (err) {
+        console.error('[Realtime] Error al inicializar onSnapshot de movimientos:', err);
+    }
+}
+
+function detenerEscuchaTiempoReal() {
+    if (unsubscribeProductos) {
+        unsubscribeProductos();
+        unsubscribeProductos = null;
+    }
+    if (unsubscribeVentas) {
+        unsubscribeVentas();
+        unsubscribeVentas = null;
+    }
+    if (unsubscribeCajasTurnos) {
+        unsubscribeCajasTurnos();
+        unsubscribeCajasTurnos = null;
+    }
+    if (unsubscribeCajasMovimientos) {
+        unsubscribeCajasMovimientos();
+        unsubscribeCajasMovimientos = null;
+    }
+    console.log('[Realtime] Escuchas en tiempo real detenidas.');
+}
+
+function startSyncWorker(win) {
+    if (win) setMainWindow(win);
     console.log("Iniciando worker de sincronización automática (cada 5 minutos)...");
     if (syncInterval) clearInterval(syncInterval);
+    
+    // Iniciar escucha si ya hay sesión autenticada
+    if (auth && auth.currentUser) {
+        iniciarEscuchaTiempoReal();
+    }
     
     // Ejecutar inmediatamente
     sincronizarCola().catch(err => console.error("Error en syncWorker inicial:", err));
@@ -757,6 +1184,10 @@ async function loginConFirebase(identifier, password) {
         const finalRole = (userProfile && userProfile.role) ? userProfile.role : 'admin';
         const finalPermisos = (userProfile && userProfile.permisos) ? userProfile.permisos : (finalRole === 'admin' ? ['all'] : []);
 
+        // Activar escucha en tiempo real inmediatamente
+        iniciarEscuchaTiempoReal();
+        sincronizarCola().catch(err => console.error("Error en sincronización post-login:", err));
+
         return { 
             success: true, 
             uid, 
@@ -801,31 +1232,17 @@ async function crearUsuarioAuth(emailOrUsername, password) {
 // DASHBOARD (NUBE)
 // ====================================================================
 async function obtenerDashboardData(tsInicioObj, strInicio) {
-    // Si firestore está disponible, intentar consultar la nube
-    if (firestore) {
-        try {
-            const { where } = require('firebase/firestore');
-
-            // 1. Cargar Ventas
-            const qVentas = query(collection(firestore, 'ventas'), where('fechaString', '>=', strInicio), orderBy('fechaString', 'desc'));
-            const snapVentas = await getDocs(qVentas).catch(async () => {
-                const qFallback = query(collection(firestore, 'ventas'), where('fecha', '>=', strInicio), orderBy('fecha', 'desc'));
-                return await getDocs(qFallback);
-            });
-            const ventasList = snapVentas.docs.map(d => ({ id: d.id, ...d.data() }));
-
-            // 2. Cargar Stock Bajo
-            const qStock = query(collection(firestore, 'productos'), where('stock', '<=', 10), orderBy('stock', 'asc'), limit(10));
-            const snapStock = await getDocs(qStock);
-            const stockList = snapStock.docs.map(d => ({ id: d.id, ...d.data() }));
-
-            return { success: true, ventas: ventasList, stock: stockList };
-        } catch (err) {
-            console.warn("Fallo al obtener dashboard desde Firestore, usando SQLite local como fallback:", err.message);
+    // Arquitectura Local-First: Consultar siempre SQLite local para evitar consumo de lecturas en Firestore
+    try {
+        const localData = db.obtenerDashboardDataLocal(tsInicioObj, strInicio);
+        if (localData && localData.success) {
+            return localData;
         }
+    } catch (localErr) {
+        console.warn("Aviso obteniendo dashboard local, intentando consulta directa:", localErr.message);
     }
 
-    // Fallback a SQLite local si no hay conexión o falló la consulta a la nube
+    // Fallback de consulta SQLite directa
     try {
         const localVentas = db.prepare(`
             SELECT * FROM ventas 
@@ -853,13 +1270,52 @@ async function subirImagenStorage(buffer, type, categoria) {
         const fileName = `${type}s/${catCode}-${unique}.webp`;
         
         const storageRef = ref(storage, fileName);
-        await uploadBytes(storageRef, buffer, { contentType: 'image/webp' });
+        await uploadBytes(storageRef, buffer, {
+            contentType: 'image/webp',
+            customMetadata: {
+                'Cache-Control': 'public, max-age=31536000, immutable'
+            }
+        });
         
         const url = await getDownloadURL(storageRef);
         return { success: true, url };
     } catch (error) {
         console.error('Error subiendo imagen a Storage:', error);
         return { success: false, error: error.message };
+    }
+}
+
+/**
+ * Descarga una imagen de Firebase Storage una sola vez y la almacena en el disco local
+ * del equipo. Actualiza SQLite con la ruta local (local-img://...) para no volver a consumirla.
+ */
+async function descargarYCachearImagen(id, imagenUrl) {
+    if (!imagenUrl || typeof imagenUrl !== 'string' || !imagenUrl.startsWith('http')) return null;
+    try {
+        const electron = require('electron');
+        const eApp = electron && electron.app;
+        if (!eApp || !eApp.getPath) return null;
+        const imgDir = path.join(eApp.getPath('userData'), 'cached_images');
+        if (!fs.existsSync(imgDir)) {
+            fs.mkdirSync(imgDir, { recursive: true });
+        }
+        const filePath = path.join(imgDir, `${id}.webp`);
+        if (fs.existsSync(filePath)) {
+            return `local-img://${filePath}`;
+        }
+
+        const response = await fetch(imagenUrl);
+        if (!response.ok) return null;
+        const arrayBuffer = await response.arrayBuffer();
+        fs.writeFileSync(filePath, Buffer.from(arrayBuffer));
+
+        const localProtocolUrl = `local-img://${filePath}`;
+        try {
+            db.prepare('UPDATE productos SET imagenLocal = ? WHERE id = ?').run(localProtocolUrl, id);
+        } catch {}
+        return localProtocolUrl;
+    } catch (err) {
+        return null;
     }
 }
 
@@ -1009,23 +1465,36 @@ async function descargarDatosDesdeNube() {
             const ventaId = docSnap.id;
             const detalles = [];
             
-            const detallesSnap = await getDocs(collection(firestore, `ventas/${ventaId}/detalle`));
-            detallesSnap.forEach(detDoc => {
-                const detData = detDoc.data();
-                if (detData) {
-                    if (detDoc.id === 'items' && Array.isArray(detData.items)) {
-                        detalles.push(...detData.items);
-                    } else if (detData.producto_id || detData.productoId) {
-                        detalles.push({
-                            id: detDoc.id || detData.id,
-                            producto_id: detData.producto_id || detData.productoId,
-                            cantidad: Number(detData.cantidad) || 1,
-                            precio_unitario: Number(detData.precio_unitario || detData.precioUnitario || 0),
-                            subtotal: Number(detData.subtotal) || 0
-                        });
-                    }
+            // Optimización Anti-N+1: Si la venta ya incluye 'items' o 'detalles' en su raíz,
+            // leerlos directamente sin realizar peticiones HTTP adicionales a subcolecciones
+            if (Array.isArray(v.items) && v.items.length > 0) {
+                detalles.push(...v.items);
+            } else if (Array.isArray(v.detalles) && v.detalles.length > 0) {
+                detalles.push(...v.detalles);
+            } else {
+                // Fallback de retrocompatibilidad solo para registros legados
+                try {
+                    const detallesSnap = await getDocs(collection(firestore, `ventas/${ventaId}/detalle`));
+                    detallesSnap.forEach(detDoc => {
+                        const detData = detDoc.data();
+                        if (detData) {
+                            if (detDoc.id === 'items' && Array.isArray(detData.items)) {
+                                detalles.push(...detData.items);
+                            } else if (detData.producto_id || detData.productoId) {
+                                detalles.push({
+                                    id: detDoc.id || detData.id,
+                                    producto_id: detData.producto_id || detData.productoId,
+                                    cantidad: Number(detData.cantidad) || 1,
+                                    precio_unitario: Number(detData.precio_unitario || detData.precioUnitario || 0),
+                                    subtotal: Number(detData.subtotal) || 0
+                                });
+                            }
+                        }
+                    });
+                } catch (detErr) {
+                    console.warn(`[Sync] Detalle de venta omitido para ${ventaId}:`, detErr.message);
                 }
-            });
+            }
             
             ventasList.push({
                 id: ventaId,
@@ -1062,9 +1531,9 @@ async function descargarDatosDesdeNube() {
         // 7. Guardar en SQLite en UNA SOLA TRANSACCIÓN ATÓMICA
         const stmtInsertProd = db.prepare('INSERT OR REPLACE INTO productos (id, codigoBarras, nombre, descripcion, categoria, precio, costo, stock, unidadMedida, imagenUrl, thumbnailUrl, imagenLocal, thumbnailLocal, disponible, destacado, etiquetas, esPrincipalWeb, productoPadreId, etiquetaVariante, mostrarPrecioWeb) VALUES (@id, @codigoBarras, @nombre, @descripcion, @categoria, @precio, @costo, @stock, @unidadMedida, @imagenUrl, @thumbnailUrl, @imagenLocal, @thumbnailLocal, @disponible, @destacado, @etiquetas, @esPrincipalWeb, @productoPadreId, @etiquetaVariante, @mostrarPrecioWeb)');
         const stmtCheckUser = db.prepare('SELECT password_hash, salt FROM usuarios WHERE id = ? OR username = ? OR (email IS NOT NULL AND LOWER(email) = LOWER(?))');
-        const stmtUser = db.prepare('INSERT OR REPLACE INTO usuarios (id, username, email, password_hash, salt, role, permisos, activo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+        const stmtUser = db.prepare('INSERT OR REPLACE INTO usuarios (id, username, email, password_hash, salt, role, permisos, activo, nombreCompleto, pin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         const stmtBanner = db.prepare('INSERT OR REPLACE INTO banners (id, title, subtitle, imageUrl, imagenLocal, badgeText, ctaText, ctaActionCategory, active, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-        const insertVenta = db.prepare('INSERT OR REPLACE INTO ventas (id, fecha, total, metodoPago, estado, clienteNombre, clienteDocumento, anulado) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+        const insertVenta = db.prepare('INSERT OR REPLACE INTO ventas (id, fecha, total, metodoPago, estado, clienteNombre, clienteDocumento, anulado, serie, correlativoNumero, numeroTicket) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         const insertDetalle = db.prepare('INSERT OR REPLACE INTO ventas_detalle (id, venta_id, producto_id, cantidad, precio_unitario, subtotal) VALUES (?, ?, ?, ?, ?, ?)');
         
         const stmtWebConfig = db.prepare('INSERT OR REPLACE INTO web_config (key, value) VALUES (?, ?)');
@@ -1100,7 +1569,9 @@ async function descargarDatosDesdeNube() {
                     salt, 
                     u.role || 'colaborador', 
                     u.permisos ? (typeof u.permisos === 'string' ? u.permisos : JSON.stringify(u.permisos)) : null,
-                    u.activo !== undefined && u.activo !== null ? (u.activo ? 1 : 0) : 1
+                    u.activo !== undefined && u.activo !== null ? (u.activo ? 1 : 0) : 1,
+                    u.nombreCompleto || username,
+                    u.pin || '1234'
                 );
             }
 
@@ -1163,6 +1634,10 @@ async function descargarDatosDesdeNube() {
                     }
                 }
 
+                const serie = v.serie || 'B001';
+                const correlativoNumero = Number(v.correlativoNumero) || 1;
+                const numeroTicket = v.numeroTicket || `${serie}-${correlativoNumero.toString().padStart(8, '0')}`;
+
                 insertVenta.run(
                     ventaId,
                     fechaSql,
@@ -1171,7 +1646,10 @@ async function descargarDatosDesdeNube() {
                     v.estado || 'completada',
                     v.clienteNombre || null,
                     v.clienteDocumento || null,
-                    (v.anulado === true || v.anulado === 1) ? 1 : 0
+                    (v.anulado === true || v.anulado === 1) ? 1 : 0,
+                    serie,
+                    correlativoNumero,
+                    numeroTicket
                 );
 
                 if (Array.isArray(itemVenta.detalles)) {
@@ -1262,6 +1740,17 @@ async function descargarDatosDesdeNube() {
         
         tx();
         console.log("Base de datos escrita y guardada localmente con éxito.");
+        setSyncMeta('last_products_sync', new Date().toISOString());
+
+        // Cachear imágenes a disco local en segundo plano
+        setTimeout(() => {
+            for (const p of productos) {
+                if (p.imagenUrl && (!p.imagenLocal || !p.imagenLocal.startsWith('local-img://'))) {
+                    descargarYCachearImagen(p.id, p.imagenUrl).catch(() => {});
+                }
+            }
+        }, 1000);
+
         return { success: true };
     } catch (e) {
         console.error('Error durante la descarga de datos:', e);
@@ -1272,6 +1761,9 @@ async function descargarDatosDesdeNube() {
 module.exports = {
     startSyncWorker,
     sincronizarCola,
+    setMainWindow,
+    iniciarEscuchaTiempoReal,
+    detenerEscuchaTiempoReal,
     get app() { return app; },
     loginConFirebase,
     subirImagenStorage,

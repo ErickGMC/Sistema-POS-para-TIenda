@@ -1,13 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { usePosStore } from '../../store/usePosStore';
-import { Search, ShoppingCart, CreditCard, Banknote, Trash2, X, MessageCircle, CheckCircle2, Phone, Image as ImageIcon, List, LayoutGrid, PlusCircle, FileText, AlertCircle } from 'lucide-react';
+import { Search, ShoppingCart, CreditCard, Trash2, AlertCircle, PlusCircle, List, LayoutGrid, Image as ImageIcon, Scale } from 'lucide-react';
 import { useUIStore } from '../../store/useUIStore';
 import { generarHtmlTicket } from '../../utils/ticketPrinter';
+import { esProductoPorPeso } from '../../utils/weightHelper';
+import ModalCobro from './ModalCobro';
+import ModalPesaje from './ModalPesaje';
+import ModalItemPersonalizado from './ModalItemPersonalizado';
+import ModalVentaExitosa from './ModalVentaExitosa';
+import { useBarcodeScanner } from '../../hooks/useBarcodeScanner';
 
 export default function CajaRegistradora() {
   const {
     carrito, total, agregarProducto, agregarItemPersonalizado, removerProducto,
-    actualizarCantidad, actualizarPrecioItem, limpiarCarrito, clienteTelefono, setClienteTelefono
+    actualizarCantidad, actualizarPrecioItem, limpiarCarrito, clienteTelefono
   } = usePosStore();
   const [codigoTerm, setCodigoTerm] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
@@ -33,20 +39,20 @@ export default function CajaRegistradora() {
 
   // Modal Ítem Libre / Servicio
   const [customModalOpen, setCustomModalOpen] = useState(false);
-  const [customNombre, setCustomNombre] = useState('');
-  const [customPrecio, setCustomPrecio] = useState('');
-  const [customCantidad, setCustomCantidad] = useState('1');
+
+  // Modal de Pesaje (Balanza / Productos a granel)
+  const [modalPesajeOpen, setModalPesajeOpen] = useState(false);
+  const [productoPesaje, setProductoPesaje] = useState<any | null>(null);
+  const [ticketItemEditando, setTicketItemEditando] = useState<string | null>(null);
+  const [pesoInput, setPesoInput] = useState<string>('0.500');
 
   // Estados del modal de cobro
   const [modalCobroOpen, setModalCobroOpen] = useState(false);
-  const [metodoPago, setMetodoPago] = useState<'efectivo' | 'tarjeta' | 'yape' | 'plin'>('efectivo');
-  const [clienteNombre, setClienteNombre] = useState('');
-  const [clienteDocumento, setClienteDocumento] = useState('');
-  const [montoRecibido, setMontoRecibido] = useState('');
+  const [clienteNombre] = useState('');
+  const [clienteDocumento] = useState('');
   
   // Estado para la pantalla de éxito post-venta
   const [ventaCompletada, setVentaCompletada] = useState<any | null>(null);
-  const [waPhone, setWaPhone] = useState('');
   
   // Custom Confirm Dialog State
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -84,29 +90,29 @@ export default function CajaRegistradora() {
     }
   };
 
+  const buscarProductos = async (termParam?: string) => {
+    let term = termParam !== undefined ? termParam : codigoTerm;
+    if (term.includes('*')) {
+      term = term.split('*')[1] || '';
+    }
+    
+    if (term.trim().length >= 2) {
+      try {
+        const results = await (window as any).electron.buscarProductosPorNombre(term);
+        const vendibles = (results || []).filter((p: any) => !p.esPrincipalWeb);
+        setSuggestions(vendibles);
+        setSelectedIndex(0);
+      } catch (err) {
+        console.error(err);
+      }
+    } else {
+      cargarDestacados();
+    }
+  };
+
   // Buscar sugerencias en tiempo real
   useEffect(() => {
-    const fetchSuggestions = async () => {
-      let term = codigoTerm;
-      if (codigoTerm.includes('*')) {
-        term = codigoTerm.split('*')[1] || '';
-      }
-      
-      if (term.trim().length >= 2) {
-        try {
-          const results = await (window as any).electron.buscarProductosPorNombre(term);
-          const vendibles = (results || []).filter((p: any) => !p.esPrincipalWeb);
-          setSuggestions(vendibles);
-          setSelectedIndex(0);
-        } catch (err) {
-          console.error(err);
-        }
-      } else {
-        cargarDestacados();
-      }
-    };
-
-    fetchSuggestions();
+    buscarProductos();
   }, [codigoTerm]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -155,6 +161,9 @@ export default function CajaRegistradora() {
         e.preventDefault();
         setCodigoTerm('');
         setModalCobroOpen(false);
+        setModalPesajeOpen(false);
+        setProductoPesaje(null);
+        setTicketItemEditando(null);
       } else if (e.key === 'Enter' && e.ctrlKey) {
         e.preventDefault();
         abrirPanelCobro();
@@ -166,6 +175,52 @@ export default function CajaRegistradora() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [carrito, total]);
 
+  const abrirModalPesaje = (prod: any, idTicketExistente: string | null = null, pesoInicial: number = 0.500) => {
+    setProductoPesaje(prod);
+    setTicketItemEditando(idTicketExistente);
+    setPesoInput(pesoInicial > 0 ? pesoInicial.toFixed(3) : '0.500');
+    setModalPesajeOpen(true);
+  };
+
+  const intentarAgregarProducto = (prod: any, cantidadPrevia?: number) => {
+    if (prod.esPrincipalWeb) {
+      mostrarMensaje(`"${prod.nombre}" es una Familia Web y no un ítem vendible en caja.`);
+      return;
+    }
+    if (prod.stock <= 0) {
+      mostrarMensaje(`Advertencia: ${prod.nombre} no cuenta con stock (Stk: 0).`);
+    }
+
+    // Si ya se especificó multiplicador en la barra ej: "0.5*CODIGO", usarlo directamente
+    if (cantidadPrevia !== undefined && cantidadPrevia !== 1) {
+      agregarProducto(prod, cantidadPrevia);
+      setMensaje('');
+      if (codigoTerm === '') {
+        cargarDestacados();
+      } else {
+        setCodigoTerm('');
+      }
+      inputRef.current?.focus();
+      return;
+    }
+
+    // Si es producto vendido por peso (kg, granel, etc.), abrir modal de pesaje
+    if (esProductoPorPeso(prod.unidadMedida)) {
+      abrirModalPesaje(prod, null, 0.500);
+      return;
+    }
+
+    // Si es por unidad estándar, agregar 1
+    agregarProducto(prod, 1);
+    setMensaje('');
+    if (codigoTerm === '') {
+      cargarDestacados();
+    } else {
+      setCodigoTerm('');
+    }
+    inputRef.current?.focus();
+  };
+
   const buscarYAgregar = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!codigoTerm.trim()) return;
@@ -173,11 +228,13 @@ export default function CajaRegistradora() {
     // Detectar si es peso ej: "0.5*770200400"
     let term = codigoTerm;
     let cantidad = 1;
+    let tieneMultiplicador = false;
     
     if (codigoTerm.includes('*')) {
       const parts = codigoTerm.split('*');
       cantidad = parseFloat(parts[0]) || 1;
       term = parts[1];
+      tieneMultiplicador = true;
     }
 
     try {
@@ -190,19 +247,20 @@ export default function CajaRegistradora() {
       }
       
       if (producto) {
-        if (producto.esPrincipalWeb) {
-          mostrarMensaje(`"${producto.nombre}" es una Familia Web y no un ítem vendible en caja.`);
-          return;
-        }
-        if (producto.stock <= 0) {
-          mostrarMensaje(`Advertencia: ${producto.nombre} no cuenta con stock (Stk: 0).`);
-        }
-        agregarProducto(producto, cantidad);
-        setMensaje('');
-        if (codigoTerm === '') {
-          cargarDestacados();
-        } else {
+        if (tieneMultiplicador) {
+          if (producto.esPrincipalWeb) {
+            mostrarMensaje(`"${producto.nombre}" es una Familia Web y no un ítem vendible en caja.`);
+            return;
+          }
+          if (producto.stock <= 0) {
+            mostrarMensaje(`Advertencia: ${producto.nombre} no cuenta con stock (Stk: 0).`);
+          }
+          agregarProducto(producto, cantidad);
+          setMensaje('');
           setCodigoTerm('');
+          inputRef.current?.focus();
+        } else {
+          intentarAgregarProducto(producto);
         }
       } else {
         mostrarMensaje('Producto no encontrado: ' + term);
@@ -215,22 +273,6 @@ export default function CajaRegistradora() {
     inputRef.current?.focus();
   };
 
-  const handleGuardarItemPersonalizado = (e: React.FormEvent) => {
-    e.preventDefault();
-    const precio = parseFloat(customPrecio) || 0;
-    const cantidad = parseFloat(customCantidad) || 1;
-    if (!customNombre.trim()) {
-      mostrarMensaje('Ingresa un nombre para el ítem o servicio');
-      return;
-    }
-    agregarItemPersonalizado(customNombre.trim(), precio, cantidad);
-    setCustomNombre('');
-    setCustomPrecio('');
-    setCustomCantidad('1');
-    setCustomModalOpen(false);
-    mostrarMensaje(`✓ "${customNombre.trim()}" agregado a la cesta`);
-  };
-
   const imprimirTicketPDF4x6 = (ventaData?: any) => {
     const vData = ventaData || ventaCompletada;
     if (!vData) return;
@@ -238,9 +280,9 @@ export default function CajaRegistradora() {
     const ticketVenta = {
       id: vData.id || 'M001',
       total: vData.total || total,
-      metodoPago: metodoPago,
-      clienteNombre: clienteNombre || 'PÚBLICO GENERAL',
-      clienteDocumento: clienteDocumento || '',
+      metodoPago: vData.metodoPago || 'Efectivo',
+      clienteNombre: vData.clienteNombre || clienteNombre || 'PÚBLICO GENERAL',
+      clienteDocumento: vData.clienteDocumento || clienteDocumento || '',
       fecha_creacion: vData.fecha || new Date().toISOString()
     };
 
@@ -270,82 +312,130 @@ export default function CajaRegistradora() {
 
   const abrirPanelCobro = () => {
     if (carrito.length === 0) return;
-    setMetodoPago('efectivo');
-    setClienteNombre('');
-    setClienteDocumento('');
-    setMontoRecibido('');
     setVentaCompletada(null);
-    setWaPhone('');
     setErrorCobro('');
     setModalCobroOpen(true);
   };
 
-  const confirmarCobro = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const buscarYAgregarPorCodigo = async (term: string) => {
+    if (!term.trim()) return;
+    let barcode = term.trim();
+    let cantidad = 1;
+    let tieneMultiplicador = false;
+
+    if (barcode.includes('*')) {
+      const parts = barcode.split('*');
+      cantidad = parseFloat(parts[0]) || 1;
+      barcode = parts[1];
+      tieneMultiplicador = true;
+    }
+
+    try {
+      const producto = await (window as any).electron.buscarProductoPorCodigo(barcode);
+      if (producto) {
+        if (tieneMultiplicador) {
+          if (producto.esPrincipalWeb) {
+            mostrarMensaje(`"${producto.nombre}" es una Familia Web y no un ítem vendible en caja.`);
+            return;
+          }
+          if (producto.stock <= 0) {
+            mostrarMensaje(`Advertencia: ${producto.nombre} no cuenta con stock (Stk: 0).`);
+          }
+          agregarProducto(producto, cantidad);
+          setMensaje('');
+          setCodigoTerm('');
+        } else {
+          intentarAgregarProducto(producto);
+        }
+      } else {
+        mostrarMensaje('Producto no encontrado: ' + barcode);
+      }
+    } catch (err) {
+      console.error(err);
+      mostrarMensaje('Error al buscar producto');
+    }
+  };
+
+  // Escaneo global de códigos de barras (pistola USB / Bluetooth HID)
+  useBarcodeScanner({
+    onScan: (scannedCode) => {
+      buscarYAgregarPorCodigo(scannedCode);
+    },
+    enabled: !modalCobroOpen && !modalPesajeOpen && !customModalOpen && !ventaCompletada,
+  });
+
+  // Escucha en tiempo real de actualizaciones de productos desde Firestore (ej. ventas desde AE_POS Android)
+  useEffect(() => {
+    if ((window as any).electron?.onProductsChanged) {
+      const unsub = (window as any).electron.onProductsChanged(() => {
+        if (codigoTerm) {
+          buscarProductos(codigoTerm);
+        } else {
+          cargarDestacados();
+        }
+      });
+      return () => unsub();
+    }
+  }, [codigoTerm]);
+
+  const confirmarCobroConDatos = async (data: {
+    metodoPago: 'efectivo' | 'tarjeta' | 'yape' | 'plin';
+    montoRecibido: number;
+    clienteNombre: string;
+    clienteDocumento: string;
+    clienteTelefono: string;
+  }) => {
     if (cargandoCobro) return;
-    
     setCargandoCobro(true);
     setMensaje('');
 
     const ventaId = window.crypto.randomUUID();
-    
     const venta = {
       id: ventaId,
       total: total,
-      metodoPago: metodoPago,
-      clienteNombre: clienteNombre.trim() || 'PÚBLICO GENERAL',
-      clienteDocumento: clienteDocumento.trim() || undefined
+      metodoPago: data.metodoPago,
+      clienteNombre: data.clienteNombre || 'PÚBLICO GENERAL',
+      clienteDocumento: data.clienteDocumento || undefined,
     };
-    
-    const detalle = carrito.map(item => ({
+
+    const detalle = carrito.map((item) => ({
       id: window.crypto.randomUUID(),
       producto_id: item.producto.id,
       cantidad: item.cantidad,
       precio_unitario: item.producto.precio,
-      subtotal: item.subtotal
+      subtotal: item.subtotal,
     }));
 
     try {
       const res = await (window as any).electron.guardarVenta(venta, detalle);
       if (res.success) {
         setErrorCobro('');
-        // Formatear datos para WhatsApp
         const ventaObj = {
           id: res.ventaId,
           fecha: new Date().toISOString(),
           total: total,
-          detalles: carrito.map(item => ({
+          detalles: carrito.map((item) => ({
             cantidad: item.cantidad,
             producto_nombre: item.producto.nombre,
             subtotal: item.subtotal,
-            precio_unitario: item.producto.precio
-          }))
+            precio_unitario: item.producto.precio,
+          })),
         };
-
-        // Mostrar pantalla de éxito
         setVentaCompletada(ventaObj);
         limpiarCarrito();
       } else {
         setErrorCobro('Error al guardar la venta: ' + (res.error || 'Error desconocido. Intenta nuevamente.'));
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setErrorCobro('Error de comunicación con la base de datos. Verifica que el sistema esté funcionando e intenta nuevamente.');
+      setErrorCobro('Error de comunicación con la base de datos: ' + (err.message || ''));
     } finally {
       setCargandoCobro(false);
       inputRef.current?.focus();
     }
   };
 
-  // Cálculo del Vuelto en tiempo real
-  const vuelto = montoRecibido ? parseFloat(montoRecibido) - total : 0;
-
-  const enviarWhatsApp = async () => {
-    if (!waPhone || waPhone.length < 8) {
-      setErrorCobro('Ingresa un número de teléfono válido con código de país (ej. 51999999999)');
-      return;
-    }
-
+  const enviarWhatsAppConTelefono = async (phone: string, ventaObj: any) => {
     const isWhatsAppLinked = useUIStore.getState().isWhatsAppLinked;
     if (!isWhatsAppLinked) {
       const confirm = await useUIStore.getState().showConfirm(
@@ -361,25 +451,25 @@ export default function CajaRegistradora() {
     const formatearFecha = (fecha: string) => {
       return new Date(fecha).toLocaleString('es-ES', {
         day: '2-digit', month: '2-digit', year: 'numeric',
-        hour: '2-digit', minute: '2-digit'
+        hour: '2-digit', minute: '2-digit',
       });
     };
 
     let texto = `*SISTEMA POS - TICKET DE VENTA*\n`;
-    texto += `Ticket ID: ${ventaCompletada.id.toUpperCase()}\n`;
-    texto += `Fecha: ${formatearFecha(ventaCompletada.fecha)}\n`;
+    texto += `Ticket ID: ${(ventaObj.id || '').toUpperCase()}\n`;
+    texto += `Fecha: ${formatearFecha(ventaObj.fecha)}\n`;
     texto += `--------------------------------\n`;
-    
-    ventaCompletada.detalles.forEach((d: any) => {
+
+    (ventaObj.detalles || []).forEach((d: any) => {
       texto += `${d.cantidad}x ${d.producto_nombre || 'Producto'}\n`;
-      texto += `Subtotal: S/ ${d.subtotal.toFixed(2)}\n`;
+      texto += `Subtotal: S/ ${(d.subtotal || 0).toFixed(2)}\n`;
     });
-    
+
     texto += `--------------------------------\n`;
-    texto += `*TOTAL: S/ ${ventaCompletada.total.toFixed(2)}*\n`;
+    texto += `*TOTAL: S/ ${(ventaObj.total || 0).toFixed(2)}*\n`;
     texto += `Gracias por tu compra.`;
 
-    useUIStore.getState().openWhatsApp(waPhone, texto);
+    useUIStore.getState().openWhatsApp(phone, texto);
     setModalCobroOpen(false);
     setVentaCompletada(null);
   };
@@ -407,6 +497,8 @@ export default function CajaRegistradora() {
               <Search className="h-6 w-6 text-slate-600" />
             </div>
             <input
+              id="barcode-search-input"
+              data-barcode-input="true"
               ref={inputRef}
               type="text"
               className="block w-full pl-12 pr-16 py-4 border border-slate-350 rounded-xl leading-5 bg-white shadow-sm text-slate-900 placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 text-2xl transition-colors"
@@ -455,16 +547,18 @@ export default function CajaRegistradora() {
                     key={prod.id}
                     onClick={() => {
                       let cantidad = 1;
+                      let tieneMultiplicador = false;
                       if (codigoTerm.includes('*')) {
                         cantidad = parseFloat(codigoTerm.split('*')[0]) || 1;
+                        tieneMultiplicador = true;
                       }
-                      agregarProducto(prod, cantidad);
-                      if (codigoTerm === '') {
-                        cargarDestacados();
-                      } else {
+                      if (tieneMultiplicador) {
+                        agregarProducto(prod, cantidad);
                         setCodigoTerm('');
+                        inputRef.current?.focus();
+                      } else {
+                        intentarAgregarProducto(prod);
                       }
-                      inputRef.current?.focus();
                     }}
                     className={`px-4 py-2.5 flex items-center justify-between cursor-pointer transition-colors ${
                       isSelected ? 'bg-emerald-600/20 hover:bg-emerald-600/30' : 'hover:bg-slate-100/70'
@@ -479,8 +573,13 @@ export default function CajaRegistradora() {
                         )}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className={`font-semibold text-sm truncate ${isSelected ? 'text-emerald-600' : 'text-slate-800'}`}>
-                          {prod.nombre}
+                        <div className={`font-semibold text-sm truncate flex items-center gap-1.5 ${isSelected ? 'text-emerald-600' : 'text-slate-800'}`}>
+                          <span>{prod.nombre}</span>
+                          {esProductoPorPeso(prod.unidadMedida) && (
+                            <span className="bg-emerald-100 text-emerald-800 text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                              <Scale size={10} /> Balanza
+                            </span>
+                          )}
                         </div>
                         <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-2 min-w-0">
                           <span className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-600 flex-shrink-0 font-mono text-[10px]">{prod.codigoBarras || 'S/C'}</span>
@@ -491,10 +590,10 @@ export default function CajaRegistradora() {
                     </div>
                     <div className="text-right flex-shrink-0 flex items-center gap-4">
                       <div className={`text-xs font-semibold px-2 py-1 rounded-md ${prod.stock < 10 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'}`}>
-                        Stk: {prod.stock}
+                        Stk: {Number.isInteger(prod.stock) ? prod.stock : prod.stock.toFixed(3)} {esProductoPorPeso(prod.unidadMedida) ? 'kg' : ''}
                       </div>
                       <div className={`font-black text-base w-24 text-right ${isSelected ? 'text-emerald-600' : 'text-slate-900'}`}>
-                        S/ {prod.precio.toFixed(2)}
+                        S/ {prod.precio.toFixed(2)}{esProductoPorPeso(prod.unidadMedida) ? '/kg' : ''}
                       </div>
                     </div>
                   </div>
@@ -503,16 +602,18 @@ export default function CajaRegistradora() {
                     key={prod.id}
                     onClick={() => {
                       let cantidad = 1;
+                      let tieneMultiplicador = false;
                       if (codigoTerm.includes('*')) {
                         cantidad = parseFloat(codigoTerm.split('*')[0]) || 1;
+                        tieneMultiplicador = true;
                       }
-                      agregarProducto(prod, cantidad);
-                      if (codigoTerm === '') {
-                        cargarDestacados();
-                      } else {
+                      if (tieneMultiplicador) {
+                        agregarProducto(prod, cantidad);
                         setCodigoTerm('');
+                        inputRef.current?.focus();
+                      } else {
+                        intentarAgregarProducto(prod);
                       }
-                      inputRef.current?.focus();
                     }}
                     className={`flex flex-col bg-white rounded-2xl overflow-hidden cursor-pointer border transition-all duration-200 shadow-sm hover:shadow-md ${
                       isSelected ? 'border-emerald-500 ring-2 ring-emerald-500/30 scale-[1.02]' : 'border-slate-250 hover:border-slate-400 hover:scale-[1.01]'
@@ -540,6 +641,11 @@ export default function CajaRegistradora() {
                           {prod.categoria}
                         </div>
                       )}
+                      {esProductoPorPeso(prod.unidadMedida) && (
+                        <div className="absolute bottom-1.5 right-2 bg-emerald-600 text-white text-[9px] font-extrabold px-1.5 py-0.5 rounded shadow-xs flex items-center gap-0.5">
+                          <Scale size={10} /> Balanza
+                        </div>
+                      )}
                     </div>
                     
                     <div className="p-3 flex flex-col flex-1 justify-between bg-white">
@@ -548,11 +654,15 @@ export default function CajaRegistradora() {
                       </div>
                       <div className="pt-2 flex justify-between items-end border-t border-slate-100 mt-2">
                         <div className="flex flex-col">
-                          <span className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Precio</span>
-                          <span className="font-black text-sm sm:text-base text-emerald-600">S/ {prod.precio.toFixed(2)}</span>
+                          <span className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">
+                            {esProductoPorPeso(prod.unidadMedida) ? 'Precio / Kg' : 'Precio'}
+                          </span>
+                          <span className="font-black text-sm sm:text-base text-emerald-600">
+                            S/ {prod.precio.toFixed(2)}{esProductoPorPeso(prod.unidadMedida) ? '/kg' : ''}
+                          </span>
                         </div>
                         <div className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${prod.stock < 10 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'}`}>
-                          Stk: {prod.stock}
+                          Stk: {Number.isInteger(prod.stock) ? prod.stock : prod.stock.toFixed(3)} {esProductoPorPeso(prod.unidadMedida) ? 'kg' : ''}
                         </div>
                       </div>
                     </div>
@@ -647,6 +757,11 @@ export default function CajaRegistradora() {
                       {item.producto.id.startsWith('custom-') && (
                         <span className="bg-indigo-100 text-indigo-700 text-[9px] font-black px-1.5 py-0.5 rounded-full">Libre</span>
                       )}
+                      {esProductoPorPeso(item.producto.unidadMedida) && (
+                        <span className="bg-emerald-100 text-emerald-800 text-[9px] font-black px-1.5 py-0.5 rounded-full flex items-center gap-0.5">
+                          <Scale size={10} /> Peso
+                        </span>
+                      )}
                     </span>
                     <span className="font-extrabold text-slate-900 text-sm flex-shrink-0 leading-tight">
                       S/ {item.subtotal.toFixed(2)}
@@ -654,13 +769,15 @@ export default function CajaRegistradora() {
                   </div>
 
                   {/* Fila Inferior: Controles de cantidad, precio unitario y eliminar */}
-                  <div className="flex justify-between items-center mt-1">
-                    <div className="flex items-center gap-2">
+                  <div className="flex justify-between items-center mt-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       {/* Control de cantidad compacto */}
                       <div className="flex items-center bg-white border border-slate-200 rounded-md overflow-hidden shadow-sm h-7">
                         <button 
                           onClick={() => {
-                            const newCant = Math.max(0, item.cantidad - 1);
+                            const esPeso = esProductoPorPeso(item.producto.unidadMedida);
+                            const decremento = esPeso ? 0.100 : 1;
+                            const newCant = Math.max(0, Math.round((item.cantidad - decremento) * 1000) / 1000);
                             if (newCant === 0) {
                               setConfirmDialog({
                                isOpen: true,
@@ -671,19 +788,19 @@ export default function CajaRegistradora() {
                                  setConfirmDialog(prev => ({ ...prev, isOpen: false }));
                                  setTimeout(() => inputRef.current?.focus(), 100);
                                }
-                             });
+                              });
                             } else {
                               actualizarCantidad(item.idTicket, newCant);
                             }
                           }}
-                          className="w-7 h-7 flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm font-bold transition-colors border-r border-slate-200 active:scale-95"
+                          className="w-7 h-7 flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm font-bold transition-colors border-r border-slate-200 active:scale-95 cursor-pointer"
                         >
                           -
                         </button>
                         <input 
                           type="number" 
                           min="0"
-                          step={item.producto.unidadMedida === 'unidad' ? '1' : '0.01'}
+                          step={esProductoPorPeso(item.producto.unidadMedida) ? '0.001' : (item.producto.unidadMedida === 'unidad' ? '1' : '0.01')}
                           value={item.cantidad}
                           onChange={(e) => {
                             const val = parseFloat(e.target.value);
@@ -696,15 +813,33 @@ export default function CajaRegistradora() {
                               removerProducto(item.idTicket);
                             }
                           }}
-                          className="w-10 h-7 text-center bg-transparent text-slate-800 text-xs font-semibold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          className={`${esProductoPorPeso(item.producto.unidadMedida) ? 'w-16' : 'w-10'} h-7 text-center bg-transparent text-slate-800 text-xs font-semibold focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`}
                         /> 
                         <button 
-                          onClick={() => actualizarCantidad(item.idTicket, item.cantidad + 1)}
-                          className="w-7 h-7 flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm font-bold transition-colors border-l border-slate-200 active:scale-95"
+                          onClick={() => {
+                            const esPeso = esProductoPorPeso(item.producto.unidadMedida);
+                            const incremento = esPeso ? 0.100 : 1;
+                            const newCant = Math.round((item.cantidad + incremento) * 1000) / 1000;
+                            actualizarCantidad(item.idTicket, newCant);
+                          }}
+                          className="w-7 h-7 flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm font-bold transition-colors border-l border-slate-200 active:scale-95 cursor-pointer"
                         >
                           +
                         </button>
                       </div>
+
+                      {/* Botón rápido de báscula para reajustar peso si es a granel */}
+                      {esProductoPorPeso(item.producto.unidadMedida) && (
+                        <button
+                          type="button"
+                          onClick={() => abrirModalPesaje(item.producto, item.idTicket, item.cantidad)}
+                          className="flex items-center gap-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 px-1.5 py-1 rounded text-[11px] font-bold transition shadow-2xs cursor-pointer"
+                          title="Volver a pesar / Ajustar en balanza"
+                        >
+                          <Scale size={13} className="text-emerald-600" />
+                          <span>Pesar</span>
+                        </button>
+                      )}
                       
                       {/* Campo de edición de precio temporal */}
                       <div className="flex items-center gap-1 bg-amber-50 border border-amber-300 px-1.5 py-0.5 rounded shadow-xs" title="Editar precio del ítem para el ticket (BD intacta)">
@@ -798,275 +933,74 @@ export default function CajaRegistradora() {
         </div>
       )}
 
-      {/* MODAL DE COBRO PROFESIONAL (SUNAT COMPLIANT) */}
-      {modalCobroOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-50/80 backdrop-blur-sm p-4 animate-in fade-in">
-          <div className="w-[500px] bg-white border border-slate-200 rounded-3xl p-6 flex flex-col shadow-2xl relative overflow-hidden">
-            
-            <button 
-              onClick={() => { setModalCobroOpen(false); setVentaCompletada(null); }}
-              className="absolute right-5 top-5 p-2 bg-slate-100 hover:bg-slate-200 rounded-full text-slate-600 hover:text-slate-900 transition z-10"
-            >
-              <X size={18} />
-            </button>
+      {/* MODAL DE COBRO */}
+      <ModalCobro
+        isOpen={modalCobroOpen && !ventaCompletada}
+        total={total}
+        cargandoCobro={cargandoCobro}
+        errorCobro={errorCobro}
+        clienteNombreInicial={clienteNombre}
+        clienteDocumentoInicial={clienteDocumento}
+        clienteTelefonoInicial={clienteTelefono}
+        onClose={() => {
+          setModalCobroOpen(false);
+          setTimeout(() => inputRef.current?.focus(), 50);
+        }}
+        onConfirm={confirmarCobroConDatos}
+      />
 
-            {ventaCompletada ? (
-              <div className="flex flex-col items-center justify-center text-center animate-in zoom-in-95 duration-300">
-                <div className="w-20 h-20 bg-emerald-500/20 rounded-full flex items-center justify-center mb-4">
-                  <CheckCircle2 size={40} className="text-emerald-600" />
-                </div>
-                <h3 className="text-2xl font-bold text-slate-900 mb-2">¡Venta Exitosa!</h3>
-                <p className="text-slate-600 mb-6">El ticket <strong className="text-emerald-600">{ventaCompletada.id}</strong> se ha guardado correctamente.</p>
-                
-                <div className="w-full bg-slate-50/50 border border-slate-200 rounded-2xl p-4 mb-5 text-center">
-                  <span className="block text-xs text-slate-500 mb-1 font-semibold uppercase tracking-wider">Monto Cobrado</span>
-                  <span className="text-4xl font-black text-emerald-600">S/ {ventaCompletada.total.toFixed(2)}</span>
-                </div>
+      {/* MODAL DE VENTA COMPLETADA / ÉXITO */}
+      <ModalVentaExitosa
+        venta={ventaCompletada}
+        clienteTelefono={clienteTelefono}
+        onClose={() => {
+          setVentaCompletada(null);
+          setModalCobroOpen(false);
+          setTimeout(() => inputRef.current?.focus(), 50);
+        }}
+        onPrintPdf={imprimirTicketPDF4x6}
+        onSendWhatsApp={enviarWhatsAppConTelefono}
+      />
 
-                <div className="w-full space-y-3 mb-6">
-                  <button
-                    onClick={() => imprimirTicketPDF4x6(ventaCompletada)}
-                    className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm rounded-xl transition flex items-center justify-center gap-2 shadow-md cursor-pointer"
-                  >
-                    <FileText size={20} />
-                    📲 Generar / Enviar Ticket PDF (Ficha 4x6)
-                  </button>
+      {/* MODAL ÍTEM LIBRE / SERVICIO */}
+      <ModalItemPersonalizado
+        isOpen={customModalOpen}
+        onClose={() => {
+          setCustomModalOpen(false);
+          setTimeout(() => inputRef.current?.focus(), 50);
+        }}
+        onAdd={(nom, pre, cant) => {
+          agregarItemPersonalizado(nom, pre, cant);
+          mostrarMensaje(`✓ "${nom}" agregado a la cesta`);
+        }}
+      />
 
-                  <div className="w-full text-left pt-2 border-t border-slate-200">
-                    <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2 ml-1 flex items-center gap-2">
-                      <Phone size={14}/> Enviar Texto por WhatsApp
-                    </label>
-                    <div className="flex gap-2">
-                      <div className="relative flex-1">
-                        <span className="absolute left-3 top-3.5 text-slate-650 text-sm font-semibold">+</span>
-                        <input 
-                          type="text" 
-                          placeholder="Ej: 51999999999" 
-                          value={waPhone || clienteTelefono}
-                          onChange={(e) => setWaPhone(e.target.value.replace(/\D/g, ''))}
-                          className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-xl p-3 pl-8 text-slate-900 focus:border-[#25D366] focus:ring-1 focus:ring-[#25D366] outline-none transition-all shadow-sm font-bold text-sm"
-                        />
-                      </div>
-                      <button 
-                        onClick={enviarWhatsApp}
-                        className="bg-[#25D366] hover:bg-[#20b858] text-slate-950 font-black px-4 rounded-xl flex items-center justify-center transition-colors shadow-md shadow-[#25D366]/20 cursor-pointer"
-                      >
-                        <MessageCircle size={20} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => { setModalCobroOpen(false); setVentaCompletada(null); }}
-                  className="w-full py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 font-bold text-sm rounded-xl transition flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  ✓ Finalizar (Nueva Venta)
-                </button>
-              </div>
-            ) : (
-              <>
-                <h3 className="text-2xl font-bold text-slate-900 mb-2 flex items-center gap-2">
-                  <Banknote className="text-emerald-600" />
-                  Finalizar Transacción
-                </h3>
-                <p className="text-slate-600 text-xs mb-6">Completa el método de pago y la información opcional para el ticket SUNAT.</p>
-
-                <div className="bg-slate-50/50 border border-slate-200 rounded-2xl p-4 mb-6 flex justify-between items-center">
-                  <span className="text-slate-600 font-medium">TOTAL A PAGAR</span>
-                  <span className="text-3xl font-black text-emerald-600">S/ {total.toFixed(2)}</span>
-                </div>
-
-                <form onSubmit={confirmarCobro} className="space-y-4">
-                  {errorCobro && (
-                    <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-3 rounded-xl text-xs font-medium flex items-start gap-2">
-                      <span className="shrink-0 mt-0.5">⚠</span>
-                      <span>{errorCobro}</span>
-                    </div>
-                  )}
-              
-              {/* Selector de Método de Pago */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-2 ml-1">Método de Pago</label>
-                <div className="grid grid-cols-4 gap-2">
-                  {(['efectivo', 'tarjeta', 'yape', 'plin'] as const).map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => setMetodoPago(m)}
-                      className={`py-3.5 px-2 rounded-xl text-xs font-black text-center border capitalize transition-all cursor-pointer ${
-                        metodoPago === m
-                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-md'
-                          : 'bg-slate-200 hover:bg-slate-300 text-slate-800 border-slate-350 shadow-sm'
-                      }`}
-                    >
-                      {m}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Si es Efectivo, mostrar cálculo de vuelto */}
-              {metodoPago === 'efectivo' && (
-                <div className="bg-slate-50 border border-slate-300 rounded-2xl p-4 grid grid-cols-2 gap-4 animate-in slide-in-from-top-2 shadow-sm">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-650 mb-1 ml-1">Monto Recibido</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-3 text-slate-600 text-sm font-bold">S/</span>
-                      <input
-                        required
-                        type="number"
-                        min={total}
-                        step="0.1"
-                        value={montoRecibido}
-                        onChange={(e) => setMontoRecibido(e.target.value)}
-                        placeholder="Ej: 50.00"
-                        className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-xl p-2.5 pl-8 text-slate-900 text-lg font-black focus:border-emerald-500 outline-none shadow-sm transition"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <span className="block text-xs font-semibold text-slate-650 mb-1">Vuelto a entregar</span>
-                    <div className={`text-2xl font-black p-2 bg-white border border-slate-300 rounded-xl text-center ${
-                      vuelto > 0 ? 'text-amber-600' : 'text-slate-500'
-                    }`}>
-                      S/ {vuelto >= 0 ? vuelto.toFixed(2) : '0.00'}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Datos de Cliente & Contacto */}
-              <div className="bg-slate-50 border border-slate-300 rounded-2xl p-4 shadow-sm space-y-2.5">
-                <span className="block text-[10px] font-extrabold text-slate-700 uppercase tracking-wider ml-1">Datos del Cliente & WhatsApp (Opcional)</span>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="col-span-1">
-                    <input
-                      type="text"
-                      placeholder="DNI / RUC"
-                      maxLength={11}
-                      value={clienteDocumento}
-                      onChange={(e) => setClienteDocumento(e.target.value.replace(/\D/g, ''))}
-                      className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-xl p-3 text-sm text-slate-900 focus:border-blue-500 outline-none shadow-sm transition"
-                    />
-                  </div>
-                  <div className="col-span-2">
-                    <input
-                      type="text"
-                      placeholder="Nombre o Razón Social"
-                      value={clienteNombre}
-                      onChange={(e) => setClienteNombre(e.target.value)}
-                      className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-xl p-3 text-sm text-slate-900 focus:border-blue-500 outline-none shadow-sm transition"
-                    />
-                  </div>
-                </div>
-                <div className="col-span-3">
-                  <input
-                    type="tel"
-                    placeholder="📲 Celular / WhatsApp (ej: 51987654321)"
-                    value={clienteTelefono}
-                    onChange={(e) => setClienteTelefono(e.target.value)}
-                    className="w-full bg-emerald-50/50 border border-emerald-300 rounded-xl p-3 text-sm font-bold text-slate-900 focus:border-emerald-500 outline-none shadow-sm transition"
-                  />
-                </div>
-              </div>
-
-              {/* Botón de Confirmar y Finalizar */}
-              <div className="pt-4">
-                <button
-                  type="submit"
-                  disabled={cargandoCobro}
-                  className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-lg rounded-xl transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 cursor-pointer"
-                >
-                  <CheckCircle2 size={20} />
-                  {cargandoCobro ? 'PROCESANDO VENTA...' : 'CONFIRMAR VENTA'}
-                </button>
-              </div>
-
-            </form>
-          </>
-          )}
-          </div>
-        </div>
-      )}
-
-      {/* Modal Ítem Libre / Servicio */}
-      {customModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl border border-slate-200">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
-                <PlusCircle className="text-indigo-600" size={22} />
-                Agregar Servicio / Ítem Libre
-              </h3>
-              <button onClick={() => setCustomModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 rounded-full cursor-pointer">
-                <X size={20} />
-              </button>
-            </div>
-            
-            <p className="text-xs text-slate-500 mb-4">
-              Ingresa cualquier producto o servicio fuera del catálogo (ej: Delivery, Empaque de Regalo). No afecta el stock de la base de datos.
-            </p>
-
-            <form onSubmit={handleGuardarItemPersonalizado} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Nombre del Servicio / Ítem</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej: Servicio de Delivery / Envío"
-                  value={customNombre}
-                  onChange={(e) => setCustomNombre(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 text-sm font-medium text-slate-800 focus:border-indigo-500 outline-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Precio Unit. (S/)</label>
-                  <input
-                    type="number"
-                    step="0.10"
-                    min="0"
-                    required
-                    placeholder="0.00"
-                    value={customPrecio}
-                    onChange={(e) => setCustomPrecio(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 text-lg font-black text-slate-800 focus:border-indigo-500 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Cantidad</label>
-                  <input
-                    type="number"
-                    min="1"
-                    required
-                    value={customCantidad}
-                    onChange={(e) => setCustomCantidad(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 text-lg font-black text-slate-800 focus:border-indigo-500 outline-none text-center"
-                  />
-                </div>
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setCustomModalOpen(false)}
-                  className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition shadow-md shadow-indigo-600/20 cursor-pointer"
-                >
-                  Agregar a Cesta
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* MODAL DE PESAJE / BALANZA */}
+      <ModalPesaje
+        isOpen={modalPesajeOpen}
+        producto={productoPesaje}
+        ticketItemId={ticketItemEditando}
+        pesoInicial={pesoInput}
+        onClose={() => {
+          setModalPesajeOpen(false);
+          setProductoPesaje(null);
+          setTicketItemEditando(null);
+          setTimeout(() => inputRef.current?.focus(), 50);
+        }}
+        onConfirm={(pesoNum) => {
+          if (ticketItemEditando) {
+            actualizarCantidad(ticketItemEditando, pesoNum);
+          } else if (productoPesaje) {
+            agregarProducto(productoPesaje, pesoNum);
+          }
+          if (codigoTerm === '') {
+            cargarDestacados();
+          } else {
+            setCodigoTerm('');
+          }
+          setTimeout(() => inputRef.current?.focus(), 80);
+        }}
+      />
 
     </div>
   );

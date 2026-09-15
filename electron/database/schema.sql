@@ -35,8 +35,14 @@ CREATE TABLE IF NOT EXISTS ventas (
     estado TEXT DEFAULT 'completada',
     clienteNombre TEXT,
     clienteDocumento TEXT,
+    serie TEXT DEFAULT 'B001',
+    correlativoNumero INTEGER DEFAULT 1,
+    numeroTicket TEXT,
     anulado INTEGER DEFAULT 0
 );
+
+-- Índices críticos para ventas y reportes ultrarrápidos (<5ms)
+CREATE INDEX IF NOT EXISTS idx_ventas_fecha ON ventas(fecha);
 
 -- Detalle de la Venta (Ticket)
 CREATE TABLE IF NOT EXISTS ventas_detalle (
@@ -49,6 +55,9 @@ CREATE TABLE IF NOT EXISTS ventas_detalle (
     FOREIGN KEY(venta_id) REFERENCES ventas(id),
     FOREIGN KEY(producto_id) REFERENCES productos(id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_ventas_detalle_venta ON ventas_detalle(venta_id);
+CREATE INDEX IF NOT EXISTS idx_ventas_detalle_producto ON ventas_detalle(producto_id);
 
 -- Cola de Sincronización (Motor Offline -> Online)
 CREATE TABLE IF NOT EXISTS sync_queue (
@@ -71,9 +80,11 @@ CREATE INDEX IF NOT EXISTS idx_sync_queue_entidad_estado
 CREATE TABLE IF NOT EXISTS usuarios (
     id TEXT PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
+    nombreCompleto TEXT DEFAULT 'Usuario',
     email TEXT,
     password_hash TEXT NOT NULL,
     salt TEXT NOT NULL,
+    pin TEXT DEFAULT '1234',
     role TEXT NOT NULL, -- 'admin', 'colaborador'
     permisos TEXT, -- JSON array de permisos adicionales si aplica
     activo INTEGER DEFAULT 1, -- 1 = Activo, 0 = Inactivo
@@ -157,3 +168,9 @@ CREATE TABLE IF NOT EXISTS cajas_movimientos (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cajas_movimientos_turno ON cajas_movimientos(turnoId);
+
+-- Tabla para metadatos de sincronización (Delta Sync)
+CREATE TABLE IF NOT EXISTS sync_meta (
+    clave TEXT PRIMARY KEY,
+    valor TEXT
+);

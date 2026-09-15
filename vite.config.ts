@@ -24,6 +24,15 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
+            if (id.includes('jspdf') || id.includes('jspdf-autotable')) {
+              return 'pdf-vendor';
+            }
+            if (id.includes('lucide-react')) {
+              return 'icons-vendor';
+            }
+            if (id.includes('firebase')) {
+              return 'firebase-vendor';
+            }
             return 'vendor';
           }
         }

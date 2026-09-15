@@ -799,6 +799,7 @@ const mockProducts = [
     onSyncCompleted: () => () => {},
     onSyncError: () => () => {},
     onSyncStatus: () => () => {},
+    onProductsChanged: () => () => {},
     obtenerWebConfig: async () => ({ success: true, config: mockWebConfig }),
     guardarWebConfig: async (key: string, value: any) => {
       (mockWebConfig as any)[key] = value;

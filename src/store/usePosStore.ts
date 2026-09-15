@@ -81,22 +81,23 @@ export const usePosStore = create<PosState>((set, get) => ({
 
       if (existenteIndex >= 0 && (producto.unidadMedida === 'unidad' || producto.unidadMedida === 'und')) {
         nuevoCarrito = [...state.carrito];
+        const nuevaCantidad = nuevoCarrito[existenteIndex].cantidad + cantidad;
         nuevoCarrito[existenteIndex] = {
           ...nuevoCarrito[existenteIndex],
-          cantidad: nuevoCarrito[existenteIndex].cantidad + cantidad,
-          subtotal: (nuevoCarrito[existenteIndex].cantidad + cantidad) * producto.precio,
+          cantidad: nuevaCantidad,
+          subtotal: Math.round(nuevaCantidad * producto.precio * 100) / 100,
         };
       } else {
         const nuevoItem: ItemCarrito = {
           idTicket: window.crypto.randomUUID(),
           producto,
           cantidad,
-          subtotal: cantidad * producto.precio,
+          subtotal: Math.round(cantidad * producto.precio * 100) / 100,
         };
         nuevoCarrito = [...state.carrito, nuevoItem];
       }
 
-      const nuevoTotal = nuevoCarrito.reduce((acc, item) => acc + item.subtotal, 0);
+      const nuevoTotal = Math.round(nuevoCarrito.reduce((acc, item) => acc + item.subtotal, 0) * 100) / 100;
       return { carrito: nuevoCarrito, total: nuevoTotal };
     }),
 
@@ -137,15 +138,15 @@ export const usePosStore = create<PosState>((set, get) => ({
     set((state) => {
       if (cantidad <= 0) {
         const nuevoCarrito = state.carrito.filter((item) => item.idTicket !== idTicket);
-        return { carrito: nuevoCarrito, total: nuevoCarrito.reduce((acc, item) => acc + item.subtotal, 0) };
+        return { carrito: nuevoCarrito, total: Math.round(nuevoCarrito.reduce((acc, item) => acc + item.subtotal, 0) * 100) / 100 };
       }
       const nuevoCarrito = state.carrito.map((item) => {
         if (item.idTicket === idTicket) {
-          return { ...item, cantidad, subtotal: cantidad * item.producto.precio };
+          return { ...item, cantidad, subtotal: Math.round(cantidad * item.producto.precio * 100) / 100 };
         }
         return item;
       });
-      const nuevoTotal = nuevoCarrito.reduce((acc, item) => acc + item.subtotal, 0);
+      const nuevoTotal = Math.round(nuevoCarrito.reduce((acc, item) => acc + item.subtotal, 0) * 100) / 100;
       return { carrito: nuevoCarrito, total: nuevoTotal };
     }),
 
@@ -157,12 +158,12 @@ export const usePosStore = create<PosState>((set, get) => ({
           return {
             ...item,
             producto: { ...item.producto, precio: nuevoPrecio },
-            subtotal: item.cantidad * nuevoPrecio,
+            subtotal: Math.round(item.cantidad * nuevoPrecio * 100) / 100,
           };
         }
         return item;
       });
-      const nuevoTotal = nuevoCarrito.reduce((acc, item) => acc + item.subtotal, 0);
+      const nuevoTotal = Math.round(nuevoCarrito.reduce((acc, item) => acc + item.subtotal, 0) * 100) / 100;
       return { carrito: nuevoCarrito, total: nuevoTotal };
     }),
 

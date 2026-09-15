@@ -57,7 +57,10 @@ const VentaSchema = z.object({
   total: z.number().min(0),
   metodoPago: z.string(),
   clienteNombre: z.string().nullable().optional(),
-  clienteDocumento: z.string().nullable().optional()
+  clienteDocumento: z.string().nullable().optional(),
+  serie: z.string().optional(),
+  correlativoNumero: z.number().optional(),
+  numeroTicket: z.string().optional()
 });
 
 const VentaDetalleSchema = z.array(z.object({
@@ -74,7 +77,9 @@ const UsuarioSchema = z.object({
   email: z.string().email().optional().nullable(),
   role: z.string(),
   permisos: z.array(z.string()).optional(),
-  activo: z.boolean().optional()
+  activo: z.boolean().optional(),
+  nombreCompleto: z.string().optional().nullable(),
+  pin: z.string().optional().nullable()
 });
 
 // IPC para abrir enlaces externos — con validación de URL
@@ -197,24 +202,26 @@ app.whenReady().then(() => {
       password,
       finalRole,
       finalPermisos,
-      1
+      1,
+      fbRes.nombreCompleto || finalUsername,
+      fbRes.pin || '1234'
     );
     
-    // PASO 3: Sincronizar base de datos completa desde Firebase tras login exitoso
+    // PASO 3: Descarga solo si la base de datos local está completamente vacía (primer arranque del POS)
     try {
-      notificar('Sincronizando datos desde la nube...');
-      console.log("Sincronizando datos completos desde Firestore tras login exitoso...");
-      const dlRes = await descargarDatosDesdeNube();
-      if (!dlRes.success) {
-        console.warn("Advertencia en sincronización automática:", dlRes.error);
-      } else {
-        console.log("Sincronización inicial de catálogo, banners y web completada con éxito.");
-        if (mainWindow && !mainWindow.isDestroyed()) {
+      const prodCountRow = db.prepare('SELECT COUNT(*) as count FROM productos').get();
+      if (!prodCountRow || prodCountRow.count === 0) {
+        notificar('Primera configuración: Descargando catálogo...');
+        console.log("[Setup] Base de datos local vacía: ejecutando descarga inicial única...");
+        const dlRes = await descargarDatosDesdeNube();
+        if (dlRes && dlRes.success && mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('sync:completed', { timestamp: Date.now() });
         }
+      } else {
+        console.log("[Login] Catálogo local existente. Omitiendo descarga masiva para proteger cuota cloud.");
       }
     } catch (e) {
-      console.error("Error en sincronización automática tras login:", e);
+      console.warn("Aviso en verificación de catálogo inicial:", e.message);
     }
 
     // PASO 4: Hacer login local con las credenciales ya registradas
@@ -238,9 +245,15 @@ app.whenReady().then(() => {
         email: finalEmail,
         role: finalRole,
         permisos: finalPermisos,
-        activo: 1
+        activo: 1,
+        nombreCompleto: fbRes.nombreCompleto || finalUsername,
+        pin: fbRes.pin || '1234'
       }
     };
+  });
+
+  ipcMain.handle('auth:loginConPin', async (_, pin) => {
+    return db.loginConPin(pin);
   });
 
   // --- IPC Handlers (Usuarios) ---
@@ -284,8 +297,8 @@ app.whenReady().then(() => {
     }
   });
 
-  // Iniciar worker de sincronización
-  startSyncWorker();
+  // Iniciar worker de sincronización y listeners en tiempo real
+  startSyncWorker(mainWindow);
 
   // IPC Handlers de Imágenes
   ipcMain.handle('img:procesarLocal', async (event, buffer, fileName, type) => {
@@ -301,10 +314,8 @@ app.whenReady().then(() => {
 
   // IPC Handlers de Sincronización
   ipcMain.handle('sync:startManualSync', async () => {
-    const { sincronizarCola, repararEmbeddingsNube } = require('./sync/firebaseSync.cjs');
+    const { sincronizarCola } = require('./sync/firebaseSync.cjs');
     await sincronizarCola();
-    // Reparar en segundo plano cualquier embedding faltante en la nube
-    repararEmbeddingsNube().catch(err => console.warn('Error en auto-reparación de embeddings:', err.message));
     return { success: true };
   });
 
@@ -329,9 +340,8 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('sync:forzarSincronizacion', async () => {
-    const { sincronizarCola, repararEmbeddingsNube } = require('./sync/firebaseSync.cjs');
+    const { sincronizarCola } = require('./sync/firebaseSync.cjs');
     await sincronizarCola();
-    repararEmbeddingsNube().catch(err => console.warn('Error en auto-reparación de embeddings:', err.message));
     return { success: true };
   });
 

@@ -45,6 +45,8 @@ export default function GestionUsuarios() {
   const [form, setForm] = useState({
     id: '',
     username: '',
+    nombreCompleto: '',
+    pin: '1234',
     email: '',
     password: '',
     role: 'colaborador' as 'admin' | 'colaborador',
@@ -94,6 +96,8 @@ export default function GestionUsuarios() {
       const payloadUser = {
         id: editMode ? form.id : window.crypto.randomUUID(),
         username: form.username.trim(),
+        nombreCompleto: form.nombreCompleto.trim() || form.username.trim(),
+        pin: form.pin.trim() || '1234',
         email: form.email ? form.email.trim() : null,
         role: form.role,
         permisos: form.role === 'admin' ? PERMISOS_DISPONIBLES.map(p => p.id) : form.permisos,
@@ -147,6 +151,8 @@ export default function GestionUsuarios() {
     const newForm = {
       id: u.id,
       username: u.username,
+      nombreCompleto: u.nombreCompleto || u.username,
+      pin: u.pin || '1234',
       email: u.email || '',
       password: '',
       role: u.role,
@@ -163,6 +169,8 @@ export default function GestionUsuarios() {
     setForm({ 
       id: '', 
       username: '', 
+      nombreCompleto: '',
+      pin: '1234',
       email: '',
       password: '', 
       role: 'colaborador', 
@@ -214,13 +222,17 @@ export default function GestionUsuarios() {
                         </div>
                         <div>
                           <h3 className="font-bold text-lg text-slate-900 flex items-center gap-2">
-                            {u.username}
+                            {u.nombreCompleto || u.username}
                           </h3>
-                          {u.email && (
-                            <p className="text-xs text-slate-500 font-medium -mt-0.5 mb-1">{u.email}</p>
-                          )}
+                          <p className="text-xs text-slate-500 font-medium -mt-0.5 mb-1">
+                            @{u.username} {u.email ? `• ${u.email}` : ''}
+                          </p>
                           
                           <div className="flex flex-wrap gap-1.5 mt-1">
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-mono font-bold">
+                              PIN: {u.pin || '1234'}
+                            </span>
+
                             <span className={`text-[10px] px-2 py-0.5 rounded-full ${
                               u.activo === false
                                 ? 'bg-slate-100 text-slate-500 border border-slate-300'
@@ -306,6 +318,18 @@ export default function GestionUsuarios() {
           <div className="bg-slate-50 border border-slate-300 rounded-2xl p-4 space-y-3.5 shadow-sm">
             <span className="block text-[10px] font-extrabold text-slate-700 uppercase tracking-wider mb-1">Credenciales de Acceso</span>
             <div>
+              <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">Nombre Completo *</label>
+              <input 
+                required 
+                type="text" 
+                value={form.nombreCompleto} 
+                onChange={e => setForm({...form, nombreCompleto: e.target.value})} 
+                className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-xl p-3 text-slate-900 focus:border-blue-500 outline-none transition-colors shadow-sm text-sm" 
+                placeholder="ej: Flor Quispe o Juan Pérez"
+              />
+            </div>
+
+            <div>
               <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">Nombre de Usuario *</label>
               <input 
                 required 
@@ -315,6 +339,20 @@ export default function GestionUsuarios() {
                 className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-xl p-3 text-slate-900 focus:border-blue-500 outline-none transition-colors shadow-sm text-sm" 
                 placeholder="ej: cajero1 o Flor"
               />
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">PIN Rápido (4-6 dígitos) *</label>
+              <input 
+                required
+                type="text" 
+                maxLength={6}
+                value={form.pin} 
+                onChange={e => setForm({...form, pin: e.target.value.replace(/\D/g, '')})} 
+                className="w-full bg-white border border-slate-350 hover:border-slate-400 rounded-xl p-3 text-slate-900 focus:border-blue-500 outline-none transition-colors shadow-sm text-sm font-mono tracking-widest" 
+                placeholder="1234"
+              />
+              <p className="text-[10px] text-slate-500 mt-1">Usado para cambio rápido de cajero en móvil y POS</p>
             </div>
 
             <div>
